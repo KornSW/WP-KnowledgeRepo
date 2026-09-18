@@ -1,0 +1,14 @@
+{
+  "name": "KornSW KnowledgeRepo",
+  "version": "0.1.0",
+  "author": "KornSW",
+  "homepage": "https://github.com/KornSW/WP-KnowledgeRepo",
+  "download_url": "https://github.com/KornSW/WP-KnowledgeRepo/releases/download/v0.1.0/kornsw-knowledgerepo.zip",
+  "requires": "6.4",
+  "requires_php": "8.1",
+  "tested": "",
+  "sections": {
+    "description": "Provider-neutrales Wissensrepository mit Wiki, Joplin-WebDAV und UJMW.",
+    "changelog": "<h4>Version 0.1.0</h4><ul><li>content nachgeliefert</li><li>initial commit</li></ul>"
+  }
+}

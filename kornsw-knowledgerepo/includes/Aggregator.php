@@ -3,8 +3,27 @@ namespace KornSW\KnowledgeRepo;
 
 /** Ordered overlays with conservative writes and opaque aggregate resource identities. */
 final class Aggregator extends TreeRepository {
-    private $mounts; private $owners = []; private $loaded = false;
-    public function __construct(array $mounts) { $this->mounts = $mounts; }
+    private $mounts; private $owners = []; private $loaded = false; private $tolerant; private $errors = [];
+    public function __construct(array $mounts, bool $tolerant = false) { $this->mounts = $mounts; $this->tolerant = $tolerant; }
+    public function errors(): array { return array_values($this->errors); }
+    private function source(string $key, string $method, array $args = []): ?array {
+        if (isset($this->errors[$key]) && $this->tolerant && !Contract::mutation($method)) { return null; }
+        try {
+            if (isset($this->mounts[$key]['error'])) { throw $this->mounts[$key]['error']; }
+            return $this->mounts[$key]['repo']->call($method, $args);
+        } catch (Failure $e) {
+            if (!$this->tolerant || Contract::mutation($method)) { throw $e; }
+            $this->errors[$key] = ['label' => $this->mounts[$key]['label'] ?? $this->mounts[$key]['mount'], 'mount' => $this->mounts[$key]['mount'], 'message' => $e->getMessage()];
+            return null;
+        }
+    }
+    private function assertWritableScope(string $area): void {
+        foreach ($this->errors as $error) {
+            if (Path::contains($error['mount'], $area) || Path::contains($area, $error['mount'])) {
+                throw new Failure('Schreibziel wegen einer ausgefallenen Quelle nicht eindeutig verfügbar.', 503);
+            }
+        }
+    }
     private function globalPath(string $mount, string $local): string { return Path::join($mount, ltrim($local, '/')); }
     protected function load(): void {
         if ($this->loaded) { return; }
@@ -15,7 +34,9 @@ final class Aggregator extends TreeRepository {
             foreach (array_reverse($ancestors) as $p) {
                 if (!isset($this->nodes[$p])) { $this->nodes[$p] = ['name' => rawurldecode(basename($p)), 'level' => 0, 'text' => '']; }
             }
-            $areas = array_merge(['/'], $mount['repo']->call('GetAreas', ['recurse' => true])['return']);
+            $result = $this->source($key, 'GetAreas', ['recurse' => true]);
+            if ($result === null) { continue; }
+            $areas = array_merge(['/'], $result['return']);
             foreach ($areas as $local) {
                 $p = $this->globalPath($root, $local); $this->owners[$p][] = [$key, $local];
                 if (!isset($this->nodes[$p])) { $this->nodes[$p] = ['name' => '', 'level' => 0, 'text' => '']; }
@@ -43,7 +64,8 @@ final class Aggregator extends TreeRepository {
         $targets = $this->targets($area); $this->node($area);
         $out = ['contentLevel' => 0, 'supportsSubAreas' => true, 'canBeRenamed' => false, 'canBeDeleted' => false, 'canAddSubAreas' => false, 'canAppendContent' => false, 'canTruncate' => false, 'supportsResources' => false];
         foreach ($targets as [$key, $local]) {
-            $c = $this->mounts[$key]['repo']->call('GetAreaCapabilities', ['area' => $local]);
+            $c = $this->source($key, 'GetAreaCapabilities', ['area' => $local]);
+            if ($c === null) { continue; }
             $level = $c['contentLevel'];
             if (is_string($level)) { $level = array_search($level, ['BeyondContent', 'ContentAggregation', 'ContentContainer'], true); }
             $out['contentLevel'] = max($out['contentLevel'], (int) $level);
@@ -59,11 +81,14 @@ final class Aggregator extends TreeRepository {
         $a = Contract::arguments($method, $args); $this->load();
         if (isset($a['resourceId'])) {
             [$key, $local] = $this->resolveResource($a['resourceId']); $a['resourceId'] = $local;
+            if (isset($this->errors[$key])) { throw new Failure($this->errors[$key]['message'], 503); }
             return $this->mounts[$key]['repo']->call($method, $a);
         }
         $area = Path::normalize($a['area'] ?? $a['contentAreaToMove'] ?? $a['startArea'] ?? '/');
         $targets = $this->targets($area);
         if (Contract::mutation($method)) {
+            $this->assertWritableScope($area);
+            if (isset($a['newParentArea'])) { $this->assertWritableScope($a['newParentArea']); }
             if (count($targets) !== 1) { return Contract::failure($method); }
             [$key, $local] = $targets[0];
             if ($local === '/' && in_array($method, ['TryDelete', 'TryRename', 'TryMoveContent'], true)) { return Contract::failure($method); }
@@ -85,21 +110,28 @@ final class Aggregator extends TreeRepository {
         if ($method === 'GetAreas') { return parent::call($method, $a); }
         if ($method === 'GetAreaCapabilities') { return $this->caps($area); }
         if ($method === 'GetAreasByKeyword') {
-            $out = [];
-            foreach ($this->walk($area) as $p) {
-                if (stripos($this->call('GetAreaName', ['area' => $p])['return'] . "\n" . $this->call('GetDirectContent', ['area' => $p])['return'], $a['keyword']) !== false) { $out[] = $p; }
+            $matches = [];
+            foreach ($this->mounts as $key => $mount) {
+                $mountPoint = Path::normalize($mount['mount']);
+                if (!Path::contains($area, $mountPoint) && !Path::contains($mountPoint, $area)) { continue; }
+                $local = Path::contains($area, $mountPoint) ? '/' : Path::normalize(substr($area, strlen(rtrim($mountPoint, '/'))));
+                $result = $this->source($key, $method, ['keyword' => $a['keyword'], 'startArea' => $local]);
+                if ($result === null) { continue; }
+                foreach ($result['return'] as $p) { $global = $this->globalPath($mountPoint, $p); if (Path::contains($area, $global)) { $matches[$global] = true; } }
             }
-            return ['return' => $out];
+            return ['return' => array_values(array_filter($this->walk($area), static function ($p) use ($matches) { return isset($matches[$p]); }))];
         }
         $this->node($area);
         if ($method === 'GetAreaName') {
             if ($area === '/' || !$targets || $targets[0][1] === '/') { return ['return' => $this->nodes[$area]['name'] ?: rawurldecode(basename($area))]; }
-            return $this->mounts[$targets[0][0]]['repo']->call($method, ['area' => $targets[0][1]]);
+            return $this->source($targets[0][0], $method, ['area' => $targets[0][1]]) ?? ['return' => rawurldecode(basename($area))];
         }
         if ($method === 'HasDirectContent') { return ['return' => $this->call('GetDirectContent', ['area' => $area])['return'] !== '']; }
         $values = [];
         foreach ($targets as [$key, $local]) {
-            $r = $this->mounts[$key]['repo']->call($method, ['area' => $local])['return'];
+            $result = $this->source($key, $method, ['area' => $local]);
+            if ($result === null) { continue; }
+            $r = $result['return'];
             if ($method === 'GetResources') {
                 foreach ($r as $info) { $info['ResourceId'] = $this->resourceId($key, $info['ResourceId']); $values[] = $info; }
             } elseif ($r !== '') { $values[] = $this->translate($r, $key, true); }

@@ -31,7 +31,7 @@ final class Admin {
                 $entry = ['id' => $id, 'type' => $type, 'label' => sanitize_text_field($source['label'] ?? ''),
                     'mount' => Path::normalize($source['mount'] ?? '/'), 'readonly' => !empty($source['readonly']),
                     'url' => esc_url_raw(trim($source['url'] ?? '')), 'root' => Path::normalize($source['root'] ?? '/'),
-                    'branch' => sanitize_text_field($source['branch'] ?? ''), 'categories' => array_values(array_filter(array_map('intval', $source['categories'] ?? []))),
+                    'branch' => sanitize_text_field($source['branch'] ?? ''), 'category_levels' => !empty($source['category_levels']), 'categories' => array_values(array_filter(array_map('intval', $source['categories'] ?? []))),
                     'token' => $old['sources'][$id]['token'] ?? ''];
                 if ($type === 'wordpress') { $entry['readonly'] = true; }
                 if ($type !== 'wordpress') {
@@ -48,25 +48,31 @@ final class Admin {
         wp_safe_redirect(admin_url('options-general.php?page=kornsw-knowledgerepo&saved=1')); exit;
     }
     private static function source(array $source, string $index): void {
-        $base = 'sources[' . $index . ']';
+        $base = 'sources[' . $index . ']'; $type = $source['type'] ?? 'wordpress';
+        $field = static function (string $key, string $label, string $default = '', string $providers = '') use ($source, $base, $type) {
+            $hidden = $providers !== '' && !in_array($type, explode(' ', $providers), true);
+            echo '<p data-providers="' . esc_attr($providers) . '"' . ($hidden ? ' hidden' : '') . '><label><span data-label="' . esc_attr($key) . '">' . esc_html($label) . '</span><br><input class="regular-text" name="' . esc_attr($base . '[' . $key . ']') . '" value="' . esc_attr($source[$key] ?? $default) . '"></label></p>';
+        };
         echo '<fieldset class="kr-source"><legend>Quelle</legend><input type="hidden" name="' . esc_attr($base . '[id]') . '" value="' . esc_attr($source['id'] ?? '') . '">';
-        echo '<p><label>Provider <select name="' . esc_attr($base . '[type]') . '">';
-        foreach (['wordpress' => 'WordPress-Beiträge', 'github' => 'GitHub', 'ujmw' => 'UJMW-Client'] as $type => $label) {
-            echo '<option value="' . esc_attr($type) . '" ' . selected($source['type'] ?? 'wordpress', $type, false) . '>' . esc_html($label) . '</option>';
+        echo '<p><label>Provider <select class="kr-provider" name="' . esc_attr($base . '[type]') . '">';
+        foreach (['wordpress' => 'WordPress-Beiträge', 'github' => 'GitHub', 'ujmw' => 'UJMW-Client'] as $value => $label) {
+            echo '<option value="' . esc_attr($value) . '" ' . selected($type, $value, false) . '>' . esc_html($label) . '</option>';
         }
-        echo '</select></label> <label><input type="checkbox" name="' . esc_attr($base . '[readonly]') . '" value="1" ' . checked(!empty($source['readonly']), true, false) . '> Quelle nur lesen</label></p>';
-        foreach (['label' => ['Bezeichnung', ''], 'mount' => ['Mountpunkt', '/'], 'url' => ['GitHub-Repository-URL / UJMW-Vertragsbasis-URL', ''], 'root' => ['GitHub-Einstiegsverzeichnis', '/'], 'branch' => ['GitHub-Branch (leer: Default)', '']] as $key => [$label, $default]) {
-            echo '<p><label>' . esc_html($label) . '<br><input class="regular-text" name="' . esc_attr($base . '[' . $key . ']') . '" value="' . esc_attr($source[$key] ?? $default) . '"></label></p>';
-        }
-        echo '<p><label>PAT / JWT / [PASS-TROUGH]<br><input type="password" autocomplete="new-password" class="regular-text" name="' . esc_attr($base . '[token]') . '" value="" placeholder="' . (!empty($source['token']) ? 'Gespeichert – leer lassen zum Beibehalten' : '') . '"></label> <label><input type="checkbox" name="' . esc_attr($base . '[clear_token]') . '" value="1"> Entfernen</label></p>';
-        echo '<details><summary>WordPress-Kategorien auswählen</summary><div class="kr-categories">';
+        echo '</select></label></p>';
+        $field('label', 'Bezeichnung'); $field('mount', 'Mountpunkt', '/');
+        echo '<p data-providers="github ujmw"' . ($type === 'wordpress' ? ' hidden' : '') . '><label><input type="checkbox" name="' . esc_attr($base . '[readonly]') . '" value="1" ' . checked(!empty($source['readonly']), true, false) . '> Quelle nur lesen</label></p>';
+        $field('url', $type === 'github' ? 'GitHub-Repository-URL' : 'UJMW-Vertragsbasis-URL', '', 'github ujmw');
+        $field('root', 'GitHub-Einstiegsverzeichnis', '/', 'github');
+        $field('branch', 'GitHub-Branch (leer: Default)', '', 'github');
+        echo '<p data-providers="github ujmw"' . ($type === 'wordpress' ? ' hidden' : '') . '><label><span data-label="token">' . ($type === 'github' ? 'GitHub Personal Access Token (PAT)' : 'JWT oder [PASS-TROUGH]') . '</span><br><input type="password" autocomplete="new-password" class="regular-text" name="' . esc_attr($base . '[token]') . '" value="" placeholder="' . (!empty($source['token']) ? 'Gespeichert – leer lassen zum Beibehalten' : '') . '"></label> <label><input type="checkbox" name="' . esc_attr($base . '[clear_token]') . '" value="1"> Entfernen</label></p>';
+        echo '<div data-providers="wordpress"' . ($type !== 'wordpress' ? ' hidden' : '') . '><p><label><input type="checkbox" name="' . esc_attr($base . '[category_levels]') . '" value="1" ' . checked($source['category_levels'] ?? !empty($source['id']), true, false) . '> Kategorien als Navigationsebenen anzeigen</label><br><span class="description">Ohne Haken filtern die Kategorien nur die Beiträge. Beiträge stehen direkt am Mountpunkt; Mehrfachtreffer erscheinen dort einmal.</span></p><p>Kategorien auswählen</p><div class="kr-categories">';
         $terms = get_terms(['taxonomy' => 'category', 'hide_empty' => false]);
         if (!is_wp_error($terms)) {
             foreach ($terms as $term) {
                 echo '<label><input type="checkbox" name="' . esc_attr($base . '[categories][]') . '" value="' . (int) $term->term_id . '" ' . checked(in_array((int) $term->term_id, $source['categories'] ?? [], true), true, false) . '> ' . esc_html($term->name) . ' (#' . (int) $term->term_id . ')</label><br>';
             }
         }
-        echo '</div></details><p><label><input type="checkbox" name="' . esc_attr($base . '[remove]') . '" value="1"> Diese Quelle beim Speichern entfernen</label></p></fieldset>';
+        echo '</div></div><p><label><input type="checkbox" name="' . esc_attr($base . '[remove]') . '" value="1"> Diese Quelle beim Speichern entfernen</label></p></fieldset>';
     }
     public static function page(): void {
         if (!current_user_can('manage_options')) { return; }
@@ -99,6 +105,28 @@ final class Admin {
         echo '</div><button type="button" class="button" id="kr-add">Quelle hinzufügen</button><template id="kr-template">'; self::source([], '__INDEX__'); echo '</template>';
         submit_button(); echo '</form></div>';
         echo '<style>.kr-source{border:1px solid #ccd0d4;padding:12px 18px;margin:16px 0;background:white;max-width:760px}.kr-source legend{font-weight:600}.kr-categories{max-height:220px;overflow:auto;padding:10px}</style>';
-        echo '<script>document.getElementById("kr-add").addEventListener("click",function(){let t=document.getElementById("kr-template").innerHTML.replaceAll("__INDEX__","new"+Date.now()+Math.random().toString(16).slice(2));document.getElementById("kr-sources").insertAdjacentHTML("beforeend",t);});</script>';
+        echo <<<'JS'
+<script>
+(function () {
+    function refresh(fieldset) {
+        const type = fieldset.querySelector('.kr-provider').value;
+        fieldset.querySelectorAll('[data-providers]').forEach(group => {
+            const types = group.dataset.providers.split(' ').filter(Boolean);
+            group.hidden = types.length > 0 && !types.includes(type);
+            group.querySelectorAll('input,select,textarea').forEach(input => { input.disabled = group.hidden; });
+        });
+        fieldset.querySelector('[data-label="url"]').textContent = type === 'github' ? 'GitHub-Repository-URL' : 'UJMW-Vertragsbasis-URL';
+        fieldset.querySelector('[data-label="token"]').textContent = type === 'github' ? 'GitHub Personal Access Token (PAT)' : 'JWT oder [PASS-TROUGH]';
+    }
+    const sources = document.getElementById('kr-sources');
+    sources.querySelectorAll('.kr-source').forEach(refresh);
+    sources.addEventListener('change', event => { if (event.target.matches('.kr-provider')) refresh(event.target.closest('.kr-source')); });
+    document.getElementById('kr-add').addEventListener('click', () => {
+        const html = document.getElementById('kr-template').innerHTML.replaceAll('__INDEX__', 'new' + Date.now() + Math.random().toString(16).slice(2));
+        sources.insertAdjacentHTML('beforeend', html); refresh(sources.lastElementChild);
+    });
+})();
+</script>
+JS;
     }
 }

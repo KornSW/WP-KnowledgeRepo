@@ -27,13 +27,14 @@ final class WordPressRepository extends TreeRepository {
         };
         foreach ($selected as $id) {
             if (!isset($byId[$id])) { continue; }
-            $parent = $addCategory($id); $page = 1;
+            $parent = ($this->config['category_levels'] ?? true) ? $addCategory($id) : '/'; $page = 1;
             do {
                 $posts = get_posts(['post_type' => 'post', 'post_status' => 'publish', 'has_password' => false,
                     'posts_per_page' => 100, 'paged' => $page++, 'orderby' => ['menu_order' => 'ASC', 'ID' => 'ASC'],
                     'tax_query' => [['taxonomy' => 'category', 'field' => 'term_id', 'terms' => [$id], 'include_children' => false]]]);
                 foreach ($posts as $post) {
                     $path = Path::join($parent, Path::segment($post->post_title ?: 'Beitrag') . '~' . $post->ID);
+                    if (isset($this->nodes[$path])) { continue; }
                     // Do not execute shortcodes, dynamic blocks or content filters in authenticated exports.
                     $text = $this->htmlToMarkdown($post->post_content);
                     $this->nodes[$path] = ['name' => $post->post_title, 'level' => 2, 'text' => $text];

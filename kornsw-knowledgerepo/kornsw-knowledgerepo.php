@@ -4,7 +4,7 @@
  * Update URI: https://raw.githubusercontent.com/KornSW/WP-KnowledgeRepo/master/doc/kornsw-knowledgerepo.update.json
  * Plugin URI: https://github.com/KornSW/WP-KnowledgeRepo
  * Description: Provider-neutrales Wissensrepository mit Wiki, Joplin-WebDAV und UJMW.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Requires at least: 6.4
  * Requires PHP: 8.1
  * Author: KornSW

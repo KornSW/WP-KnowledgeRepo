@@ -6,7 +6,7 @@ final class Http {
         if (strtolower((string) parse_url($url, PHP_URL_SCHEME)) !== 'https' || parse_url($url, PHP_URL_USER) || parse_url($url, PHP_URL_PASS)) {
             throw new Failure('Remote-Endpunkte müssen HTTPS ohne Zugangsdaten in der URL verwenden.', 400);
         }
-        $agent = 'KornSW-WordPress-KnowledgeRepo/0.1.1';
+        $agent = 'KornSW-WordPress-KnowledgeRepo/0.1.2';
         $site = preg_replace('/[\r\n]/', '', home_url('/'));
         if ($site !== '') { $agent .= ' (+' . $site . ')'; }
         $headers = ['Accept' => 'application/json', 'Content-Type' => 'application/json', 'User-Agent' => $agent];
@@ -41,17 +41,26 @@ final class Http {
     }
 }
 final class RemoteRepository implements Repository {
-    private $config; private $incoming;
-    public function __construct(array $config, string $incoming = '') { $this->config = $config; $this->incoming = $incoming; }
+    private $config; private $incoming; private $anonymousPassThrough;
+    public function __construct(array $config, string $incoming = '', bool $anonymousPassThrough = false) { $this->config = $config; $this->incoming = $incoming; $this->anonymousPassThrough = $anonymousPassThrough; }
     public function call(string $method, array $args = []): array {
         $args = Contract::arguments($method, $args);
         if (Contract::mutation($method) && !empty($this->config['readonly'])) { return Contract::failure($method); }
         $token = $this->config['token'] ?? '';
         if ($token === '[PASS-TROUGH]') {
-            if ($this->incoming === '') { throw new Failure('Diese Quelle benötigt einen eingehenden UJMW-Token.', 403); }
+            if ($this->incoming === '' && !$this->anonymousPassThrough) { throw new Failure('Diese Quelle benötigt einen eingehenden UJMW-Token.', 403); }
             $token = $this->incoming;
         }
-        $result = Http::json(rtrim($this->config['url'], '/') . '/' . rawurlencode($method), 'POST', $args, $token);
+        $load = function () use ($method, $args, $token): array {
+            $result = Http::json(rtrim($this->config['url'], '/') . '/' . rawurlencode($method), 'POST', $args, $token);
+            if (!empty($result['fault'])) { throw new Failure('Der externe Wissensdienst meldet einen Fehler.', 502); }
+            if ($method !== 'GetAreaCapabilities' && !array_key_exists('return', $result)) { throw new Failure('Unvollständige UJMW-Antwort.', 502); }
+            return $result;
+        };
+        if (Contract::mutation($method)) {
+            try { return $load(); } finally { FileCache::invalidate(); }
+        }
+        $result = FileCache::remember('ujmw:' . wp_json_encode([$this->config, $token, $method, $args]), $load);
         if (!empty($result['fault'])) { throw new Failure('Der externe Wissensdienst meldet einen Fehler.', 502); }
         if ($method !== 'GetAreaCapabilities' && !array_key_exists('return', $result)) { throw new Failure('Unvollständige UJMW-Antwort.', 502); }
         return $result;

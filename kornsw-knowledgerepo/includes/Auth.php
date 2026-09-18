@@ -52,7 +52,8 @@ final class Auth {
         return ['token' => $payload . '.' . Path::b64(hash_hmac('sha256', $payload, self::secret(), true)), 'expires' => $expires];
     }
     public static function bearer(): array {
-        if (!preg_match('/^Bearer ([A-Za-z0-9_.-]+)$/', self::header(), $m) || strlen($m[1]) > 8192) { throw new Failure('Bearer-Token erforderlich.', 401); }
+        if (self::header() === '') { return ['user' => new \WP_User(0), 'token' => '']; }
+        if (!preg_match('/^(?:Bearer\s+)?([A-Za-z0-9_.-]+)$/i', self::header(), $m) || strlen($m[1]) > 8192) { throw new Failure('JWT erforderlich.', 401); }
         $parts = explode('.', $m[1]);
         if (count($parts) !== 3) { throw new Failure('Ungültiger Token.', 401); }
         try { $header = json_decode(Path::unb64($parts[0]), true); $claims = json_decode(Path::unb64($parts[1]), true); }

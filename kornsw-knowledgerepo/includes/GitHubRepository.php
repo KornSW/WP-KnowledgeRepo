@@ -16,6 +16,15 @@ final class GitHubRepository extends TreeRepository {
     }
     protected function load(): void {
         if ($this->loaded) { return; }
+        $state = FileCache::remember('github:' . wp_json_encode($this->config), function () {
+            try { $this->loadFresh(); } catch (\Throwable $e) { $this->loaded = false; throw $e; }
+            return ['nodes' => $this->nodes, 'files' => $this->files, 'documents' => $this->documents,
+                'bytes' => array_map('base64_encode', $this->bytes), 'branch' => $this->branch, 'head' => $this->head, 'tree' => $this->tree];
+        });
+        foreach (['nodes', 'files', 'documents', 'branch', 'head', 'tree'] as $key) { $this->$key = $state[$key]; }
+        $this->bytes = array_map('base64_decode', $state['bytes']); $this->loaded = true;
+    }
+    private function loadFresh(): void {
         $this->branch = $this->config['branch'] ?? '';
         if ($this->branch === '') { $this->branch = $this->api('')['default_branch']; }
         $commit = $this->api('/commits/' . rawurlencode($this->branch));
@@ -305,7 +314,7 @@ final class GitHubRepository extends TreeRepository {
         $a = Contract::arguments($method, $args);
         if (!empty($this->config['readonly'])) { return Contract::failure($method); }
         for ($attempt = 0; $attempt < 3; $attempt++) {
-            $this->loaded = false; $this->bytes = []; $this->load(); $before = $this->files; $original = $this->bytes;
+            $this->loaded = false; $this->bytes = []; $this->loadFresh(); $before = $this->files; $original = $this->bytes;
             try {
                 $result = $this->mutate($method, $a);
                 if (!$result['return']) { $this->loaded = false; $this->bytes = []; return $result; }
@@ -319,7 +328,9 @@ final class GitHubRepository extends TreeRepository {
                 if (!$entries) { return $result; }
                 $tree = $this->api('/git/trees', 'POST', ['base_tree' => $this->tree, 'tree' => $entries]);
                 $commit = $this->api('/git/commits', 'POST', ['message' => 'KnowledgeRepository: ' . $method, 'tree' => $tree['sha'], 'parents' => [$this->head]]);
-                $this->api('/git/refs/heads/' . str_replace('%2F', '/', rawurlencode($this->branch)), 'PATCH', ['sha' => $commit['sha'], 'force' => false]);
+                try {
+                    $this->api('/git/refs/heads/' . str_replace('%2F', '/', rawurlencode($this->branch)), 'PATCH', ['sha' => $commit['sha'], 'force' => false]);
+                } finally { FileCache::invalidate(); }
                 $this->loaded = false; $this->bytes = []; return $result;
             } catch (Failure $e) {
                 $this->loaded = false; $this->bytes = [];

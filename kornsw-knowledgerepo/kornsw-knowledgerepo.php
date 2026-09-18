@@ -2,7 +2,7 @@
 /**
  * Plugin Name: KornSW KnowledgeRepo
  * Description: Provider-neutrales Wissensrepository mit Wiki, Joplin-WebDAV und UJMW.
- * Version: 0.1.1
+ * Version: 0.1.2
  * Requires at least: 6.4
  * Requires PHP: 8.1
  * Author: KornSW
@@ -11,7 +11,7 @@
  */
 if (!defined('ABSPATH')) { exit; }
 define('KORNSW_KR_FILE', __FILE__);
-foreach (['Contract', 'Http', 'WordPressRepository', 'GitHubRepository', 'Aggregator', 'Auth', 'Joplin', 'Admin', 'Plugin'] as $class) {
+foreach (['Contract', 'FileCache', 'Http', 'WordPressRepository', 'GitHubRepository', 'Aggregator', 'Auth', 'Joplin', 'Admin', 'Plugin'] as $class) {
     require_once __DIR__ . '/includes/' . $class . '.php';
 }
 register_activation_hook(__FILE__, ['KornSW\\KnowledgeRepo\\Plugin', 'activate']);

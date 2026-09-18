@@ -139,9 +139,14 @@ abstract class TreeRepository implements Repository {
         return $out;
     }
     protected function walk(string $area): array {
-        $out = [];
-        foreach ($this->children($area) as $p) { $out[] = $p; $out = array_merge($out, $this->walk($p)); }
-        return $out;
+        $this->load(); $index = []; $out = [];
+        foreach ($this->nodes as $path => $node) {
+            if ($path !== '/') { $index[Path::parent($path)][] = $path; }
+        }
+        $visit = function (string $parent) use (&$visit, &$out, &$index): void {
+            foreach ($index[$parent] ?? [] as $path) { $out[] = $path; $visit($path); }
+        };
+        $visit($area); return $out;
     }
     protected function caps(string $area): array {
         $n = $this->node($area);

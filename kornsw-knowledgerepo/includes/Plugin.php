@@ -6,24 +6,27 @@ final class Plugin {
         foreach (['dom', 'mbstring', 'openssl', 'fileinfo'] as $extension) {
             if (!extension_loaded($extension)) { wp_die('KornSW KnowledgeRepo benötigt die PHP-Erweiterung ' . esc_html($extension) . '.'); }
         }
-        add_option('kornsw_kr_settings', ['jwt_ttl' => 86400, 'sources' => [], 'permissions' => ['administrator' => ['page' => 2, 'joplin' => 2, 'ujmw' => 2], 'anonymous' => ['page' => 0, 'joplin' => 0, 'ujmw' => 0]]], '', false);
+        add_option('kornsw_kr_settings', ['cache_ttl' => 14400, 'jwt_ttl' => 86400, 'sources' => [], 'permissions' => ['administrator' => ['page' => 2, 'joplin' => 2, 'ujmw' => 2], 'anonymous' => ['page' => 0, 'joplin' => 0, 'ujmw' => 0]]], '', false);
     }
     public static function boot(): void {
         Admin::boot();
+        foreach (['save_post', 'deleted_post', 'set_object_terms', 'created_term', 'edited_term', 'delete_term'] as $hook) {
+            add_action($hook, [FileCache::class, 'invalidate'], 10, 0);
+        }
         // init runs before canonical redirects, REST dispatch and theme rendering.
         add_action('init', [self::class, 'route'], 1);
     }
-    public static function repository(string $incoming = '', bool $tolerant = false): Repository {
+    public static function repository(string $incoming = '', bool $tolerant = false, bool $ujmw = false): Repository {
         $mounts = [];
         foreach (Auth::settings()['sources'] ?? [] as $id => $source) {
             $mount = ['mount' => $source['mount'], 'label' => $source['label'] ?: $source['mount']];
             try {
                 $source['token'] = Auth::revealSecret($source['token'] ?? '');
-                if ($source['type'] === 'ujmw' && $source['token'] === '[PASS-TROUGH]' && $incoming === '') { continue; }
+                if ($source['type'] === 'ujmw' && $source['token'] === '[PASS-TROUGH]' && $incoming === '' && !$ujmw) { continue; }
                 switch ($source['type']) {
                     case 'wordpress': $mount['repo'] = new WordPressRepository($source); break;
                     case 'github': $mount['repo'] = new GitHubRepository($source); break;
-                    case 'ujmw': $mount['repo'] = new RemoteRepository($source, $incoming); break;
+                    case 'ujmw': $mount['repo'] = new RemoteRepository($source, $incoming, $ujmw); break;
                     default: throw new Failure('Unbekannter Quellentyp.', 500);
                 }
             } catch (Failure $e) {
@@ -76,7 +79,7 @@ final class Plugin {
                 if (Contract::mutation($operation) && $level !== 2) { throw new Failure('Schreibzugriff nicht erlaubt.', 403); }
                 $a = json_decode(self::body(), true);
                 if (!is_array($a)) { throw new Failure('JSON-Objekt erwartet.', 400); }
-                $r = self::repository($auth['token'])->call($operation, $a);
+                $r = self::repository($auth['token'], false, true)->call($operation, $a);
                 self::respond(200, ['Content-Type' => 'application/json; charset=utf-8'], wp_json_encode($r));
             }
             if ($relative === '/_search') { $json = true; }
@@ -106,6 +109,9 @@ final class Plugin {
                 if (!is_user_logged_in() || !wp_verify_nonce($nonce, 'kornsw_kr_wiki')) { throw new Failure('Sitzung abgelaufen. Bitte Seite neu laden.', 403); }
                 $action = $_POST['kr_action'] ?? '';
                 $activeDialog = in_array($action, ['token', 'revoke'], true) ? 'api-dialog' : 'edit-dialog';
+                if ($action === 'refresh') {
+                    FileCache::invalidate(); wp_safe_redirect(self::link($area), 303); exit;
+                }
                 if ($action === 'token') { $token = Auth::issue(); }
                 elseif ($action === 'revoke') {
                     $uid = get_current_user_id(); update_user_meta($uid, 'kornsw_kr_token_version', (int) get_user_meta($uid, 'kornsw_kr_token_version', true) + 1); $message = 'Deine bisherigen Tokens wurden widerrufen.';
@@ -216,9 +222,10 @@ final class Plugin {
         $scriptNonce = base64_encode(random_bytes(18));
         $errors = $repo instanceof Aggregator ? $repo->errors() : [];
         ob_start();
-        ?><!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?php echo esc_html($title); ?> · Wissen</title><link rel="stylesheet" href="<?php echo esc_url(plugins_url('assets/wiki.css', KORNSW_KR_FILE) . '?ver=0.1.1'); ?>"></head><body>
+        ?><!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?php echo esc_html($title); ?> · Wissen</title><link rel="stylesheet" href="<?php echo esc_url(plugins_url('assets/wiki.css', KORNSW_KR_FILE) . '?ver=0.1.2'); ?>"></head><body>
         <header class="site-header"><a class="brand" href="<?php echo esc_url(home_url('/wiki/')); ?>">Wissen</a><div class="header-actions">
         <form id="wiki-search" role="search" action="<?php echo esc_url(home_url('/wiki/_search')); ?>"><input type="search" name="q" maxlength="200" aria-label="Wissen durchsuchen" placeholder="Wissen durchsuchen …" required><button type="submit" class="quiet">Suchen</button></form>
+        <?php if (is_user_logged_in()) { ?><form method="post" action="<?php echo esc_url(self::link($area)); ?>"><?php wp_nonce_field('kornsw_kr_wiki'); ?><button class="quiet" name="kr_action" value="refresh" title="Quellen neu laden">Aktualisieren</button></form><?php } ?>
         <?php if ($canEdit) { ?><button type="button" class="quiet" data-dialog="edit-dialog">Bearbeiten</button><?php } ?>
         <?php if ($canToken) { ?><button type="button" class="quiet" data-dialog="api-dialog">API-Zugang</button><?php } ?>
         <?php if (!is_user_logged_in()) { ?><a class="quiet" href="<?php echo esc_url(wp_login_url(self::link($area))); ?>">Anmelden</a><?php } ?>
@@ -226,9 +233,15 @@ final class Plugin {
         foreach ($crumbs as $path => $name) {
             echo '<li>' . ($path === $area ? '<span aria-current="page">' . esc_html($name) . '</span>' : '<a href="' . esc_url(self::link($path)) . '">' . esc_html($name) . '</a>') . '</li>';
         }
-        ?></ol></nav><div class="layout"><nav class="area-nav" aria-label="Wissensbereiche"><h2>Bereiche</h2><?php
+        ?></ol></nav><div class="layout"><div class="sidebar"><nav class="area-nav" aria-label="Wissensbereiche"><h2>Bereiche</h2><?php
         foreach ($links as $path => $name) { echo '<a' . ($path === $area ? ' aria-current="page"' : '') . ' href="' . esc_url(self::link($path)) . '">' . esc_html($name) . '</a>'; }
-        ?></nav><main><h1><?php echo esc_html($title); ?></h1><?php
+        ?></nav><aside class="outline" aria-label="Dokumentgliederung"><?php
+        if ($view['outline']) {
+            echo '<h2>Auf dieser Seite</h2><nav>';
+            foreach ($view['outline'] as $item) { echo '<a class="outline-level-' . $item['level'] . '" href="#' . esc_attr($item['id']) . '">' . esc_html($item['label']) . '</a>'; }
+            echo '</nav>';
+        }
+        ?></aside></div><main><h1><?php echo esc_html($title); ?></h1><?php
         if ($errors) {
             echo '<details class="source-status"><summary>' . count($errors) . ' Quelle(n) momentan nicht verfügbar</summary><ul>';
             foreach ($errors as $error) { echo '<li><strong>' . esc_html($error['label']) . '</strong>: ' . esc_html($error['message']) . '</li>'; }
@@ -241,13 +254,7 @@ final class Plugin {
             echo '</ul>';
             if (!$links && !$errors) { echo '<p class="muted">Hier sind noch keine Inhalte vorhanden.</p>'; }
         }
-        ?></main><aside class="outline" aria-label="Dokumentgliederung"><?php
-        if ($view['outline']) {
-            echo '<h2>Auf dieser Seite</h2><nav>';
-            foreach ($view['outline'] as $item) { echo '<a class="outline-level-' . $item['level'] . '" href="#' . esc_attr($item['id']) . '">' . esc_html($item['label']) . '</a>'; }
-            echo '</nav>';
-        }
-        ?></aside></div><?php
+        ?></main></div><?php
         self::dialogStart('search-dialog', 'Wissen durchsuchen');
         echo '<p id="search-status" role="status"></p><div id="search-results"></div></dialog>';
         if ($canEdit) {

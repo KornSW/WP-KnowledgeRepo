@@ -19,8 +19,7 @@ final class Admin {
                 $settings['permissions'][$role][$channel] = max(0, min($role === 'anonymous' ? 1 : 2, (int) ($input['permissions'][$role][$channel] ?? 0)));
             }
         }
-        // UJMW requires a user-bound JWT in iteration one, even when anonymous is listed.
-        $settings['permissions']['anonymous']['ujmw'] = 0;
+        $settings['cache_ttl'] = (int) round(max(0, min(168, (float) ($input['cache_hours'] ?? 4))) * 3600);
         try {
             foreach ($input['sources'] ?? [] as $source) {
                 if (!empty($source['remove'])) { continue; }
@@ -43,6 +42,7 @@ final class Admin {
                 $settings['sources'][$id] = $entry;
             }
             update_option('kornsw_kr_settings', $settings, false);
+            FileCache::invalidate();
             if (!empty($input['rotate'])) { update_option('kornsw_kr_jwt_secret', Path::b64(random_bytes(48)), false); }
         } catch (Failure $e) { wp_die(esc_html($e->getMessage()), 'Einstellungen nicht gespeichert', ['back_link' => true]); }
         wp_safe_redirect(admin_url('options-general.php?page=kornsw-knowledgerepo&saved=1')); exit;
@@ -88,7 +88,7 @@ final class Admin {
             foreach (['page', 'joplin', 'ujmw'] as $channel) {
                 echo '<td>';
                 if ($role === 'anonymous') {
-                    echo '<input aria-label="Anonymous ' . esc_attr($channel) . '" type="checkbox" name="permissions[anonymous][' . esc_attr($channel) . ']" value="1" ' . checked(!empty($s['permissions'][$role][$channel]), true, false) . ($channel === 'ujmw' ? ' disabled' : '') . '> Nur lesen';
+                    echo '<input aria-label="Anonymous ' . esc_attr($channel) . '" type="checkbox" name="permissions[anonymous][' . esc_attr($channel) . ']" value="1" ' . checked(!empty($s['permissions'][$role][$channel]), true, false) . '> Nur lesen';
                 } else {
                     echo '<select aria-label="' . esc_attr($info['name'] . ' ' . $channel) . '" name="permissions[' . esc_attr($role) . '][' . esc_attr($channel) . ']">';
                     foreach ([0 => 'Kein Zugriff', 1 => 'Nur lesen', 2 => 'Schreibzugriff'] as $value => $label) { echo '<option value="' . $value . '" ' . selected((int) ($s['permissions'][$role][$channel] ?? 0), $value, false) . '>' . esc_html($label) . '</option>'; }
@@ -98,7 +98,8 @@ final class Admin {
             }
             echo '</tr>';
         }
-        echo '</tbody></table><p>Anonymous verwendet bei Joplin <code>anonymous</code> / <code>anonymous</code>. UJMW setzt in dieser Version einen angemeldeten Benutzer mit eigenem Token voraus.</p>';
+        echo '</tbody></table><p>Anonymous verwendet bei Joplin <code>anonymous</code> / <code>anonymous</code>. Bei freigegebenem anonymem UJMW-Lesezugriff darf der Authorization-Header leer bleiben. Ungültige Tokens werden weiterhin abgelehnt.</p>';
+        echo '<h2>Cache</h2><p><label>Lebensdauer (Stunden) <input type="number" min="0" max="168" step="0.25" name="cache_hours" value="' . esc_attr((string) (($s['cache_ttl'] ?? 14400) / 3600)) . '"></label></p><p>Standard: 4 Stunden. 0 deaktiviert den Cache. Angemeldete Benutzer können ihn im Wiki über Aktualisieren verwerfen.</p>';
         echo '<h2>Tokens</h2><p><label>Gültigkeit (Sekunden) <input type="number" min="300" max="31536000" name="jwt_ttl" value="' . (int) ($s['jwt_ttl'] ?? 86400) . '"></label></p><p><label><input type="checkbox" name="rotate" value="1"> Alle bisher ausgestellten Tokens widerrufen</label></p>';
         echo '<h2>Quellen und Mountpunkte</h2><p>Reihenfolge entspricht der Lesereihenfolge im Aggregator. Mehrfachbelegungen sind als Overlay lesbar; mehrdeutige Schreibziele werden abgelehnt.</p><div id="kr-sources">';
         foreach ($s['sources'] ?? [] as $id => $source) { self::source($source, $id); }

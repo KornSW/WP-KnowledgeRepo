@@ -7,7 +7,14 @@ final class WordPressRepository extends TreeRepository {
     public function __construct(array $config) { $this->config = $config; }
     protected function load(): void {
         if ($this->loaded) { return; }
+        $state = FileCache::remember('wordpress:' . wp_json_encode($this->config), function () {
+            $this->loadFresh();
+            return ['nodes' => $this->nodes, 'attachments' => $this->attachments];
+        });
+        $this->nodes = $state['nodes']; $this->attachments = $state['attachments'];
         $this->loaded = true;
+    }
+    private function loadFresh(): void {
         $this->nodes['/'] = ['name' => $this->config['label'] ?? 'WordPress', 'level' => 1, 'text' => ''];
         $selected = array_map('intval', $this->config['categories'] ?? []);
         $terms = get_terms(['taxonomy' => 'category', 'hide_empty' => false, 'orderby' => 'name']);

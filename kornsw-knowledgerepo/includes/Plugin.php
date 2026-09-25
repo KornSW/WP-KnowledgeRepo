@@ -21,7 +21,14 @@ final class Plugin {
     }
     public static function repository(string $incoming = '', bool $tolerant = false, bool $ujmw = false): Repository {
         $mounts = [];
+        $sources = [];
         foreach (Auth::settings()['sources'] ?? [] as $id => $source) {
+            if (($source['type'] ?? '') === 'github_multi') {
+                try { foreach (GitHubRepository::multiEntries($source) as $child=>$entry) { $sources[$id . ':' . $child] = $entry; } }
+                catch (Failure $e) { if (!$tolerant) { throw $e; } $sources[$id] = $source; }
+            } else { $sources[$id] = $source; }
+        }
+        foreach ($sources as $id => $source) {
             $mount = ['mount' => $source['mount'], 'label' => $source['label'] ?: $source['mount']];
             try {
                 $source['token'] = Auth::revealSecret($source['token'] ?? '');
@@ -97,7 +104,13 @@ final class Plugin {
         $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH); $prefix = parse_url(home_url('/wiki'), PHP_URL_PATH);
         if ($path !== $prefix && strpos($path, $prefix . '/') !== 0) { return; }
         $relative = substr($path, strlen($prefix)); $method = $_SERVER['REQUEST_METHOD'] ?? 'GET'; $json = false; $dav = false;
+        if (WikiPresentation::defer($relative)) { return; }
         try {
+            if ($relative === '/ujmw/swagger.json') {
+                $json = true;
+                if (!in_array($method, ['GET', 'HEAD'], true)) { throw new Failure('Swagger benötigt GET.', 405); }
+                self::respond(200, ['Content-Type'=>'application/json; charset=utf-8'], wp_json_encode(OpenApi::document()));
+            }
             if (preg_match('~^/joplin/([^/]+)(/.*)?$~', $relative, $match)) {
                 $dav = true; $profile = rawurldecode($match[1]);
                 if (strlen($profile) > 256 || preg_match('/[\x00-\x1f\/\\\\]/', $profile) || in_array($profile, ['.', '..'], true)) { throw new Failure('Ungültiges Sync-Profil.', 400); }
@@ -272,9 +285,14 @@ final class Plugin {
         $crumbs = ['/'=>'Wissen'] + array_reverse($crumbs, true);
         $canEdit = $permission === 2 && is_user_logged_in(); $canToken = is_user_logged_in() && Auth::permission('ujmw') > 0;
         $scriptNonce = base64_encode(random_bytes(18));
+        $onPage = WikiPresentation::mode() === 'on_page';
         $errors = method_exists($repo, 'errors') ? $repo->errors() : FileCache::warnings();
         ob_start();
-        ?><!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?php echo esc_html($title); ?> · Wissen</title><link rel="stylesheet" href="<?php echo esc_url(plugins_url('assets/wiki.css', KORNSW_KR_FILE) . '?ver=0.1.8'); ?>"></head><body>
+        if ($onPage) { WikiPresentation::header($title, $scriptNonce); }
+        else {
+        ?><!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?php echo esc_html($title); ?> · Wissen</title><?php WikiPresentation::head($scriptNonce); ?></head><body><?php
+        }
+        ?><div id="kornsw-wiki">
         <header class="site-header"><a class="brand" href="<?php echo esc_url(home_url('/wiki/')); ?>">Wissen</a><div class="header-actions">
         <form id="wiki-search" role="search" action="<?php echo esc_url(home_url('/wiki/_search')); ?>"><input type="search" name="q" maxlength="200" aria-label="Wissen durchsuchen" placeholder="Wissen durchsuchen …" required><button type="submit" class="quiet">Suchen</button></form>
         <?php if (is_user_logged_in()) { ?><form method="post" action="<?php echo esc_url(self::link($area)); ?>"><?php wp_nonce_field('kornsw_kr_wiki'); ?><button class="quiet" name="kr_action" value="refresh" title="Quellen neu laden">Aktualisieren</button></form><?php } ?>
@@ -346,14 +364,14 @@ final class Plugin {
                 });
                 if (!location.hash) article.querySelector('mark')?.scrollIntoView({block:'center'});
             }
-            document.querySelectorAll('.kr-link-directory img').forEach(img => {
+            document.querySelectorAll('#kornsw-wiki .kr-link-directory img').forEach(img => {
                 img.addEventListener('error', () => { img.hidden = true; });
                 if (img.complete && !img.naturalWidth) img.hidden = true;
             });
             const show = id => { const dialog = document.getElementById(id); if (dialog && !dialog.open) dialog.showModal(); };
-            document.querySelectorAll('[data-dialog]').forEach(button => button.addEventListener('click', () => show(button.dataset.dialog)));
-            document.querySelectorAll('.close-dialog').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
-            document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('click', event => {
+            document.querySelectorAll('#kornsw-wiki [data-dialog]').forEach(button => button.addEventListener('click', () => show(button.dataset.dialog)));
+            document.querySelectorAll('#kornsw-wiki .close-dialog').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
+            document.querySelectorAll('#kornsw-wiki dialog').forEach(dialog => dialog.addEventListener('click', event => {
                 if (event.target !== dialog) return;
                 const r = dialog.getBoundingClientRect();
                 if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close();
@@ -401,16 +419,20 @@ final class Plugin {
                     render(data); if (!data.completed) timer = setTimeout(() => poll(data.id), 750);
                 } catch (error) { fail(error); }
             });
-            const outlineLinks = [...document.querySelectorAll('.outline a')];
+            const outlineLinks = [...document.querySelectorAll('#kornsw-wiki .outline a')];
             if ('IntersectionObserver' in window && outlineLinks.length) {
                 const observer = new IntersectionObserver(entries => { for (const entry of entries) if (entry.isIntersecting) {
                     outlineLinks.forEach(link => { if (link.hash === '#' + entry.target.id) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); });
                 } }, {rootMargin: '-8% 0px -70% 0px'});
-                document.querySelectorAll('article h1[id],article h2[id],article h3[id],article h4[id],article h5[id],article h6[id]').forEach(h => observer.observe(h));
+                document.querySelectorAll('#kornsw-wiki article h1[id],article h2[id],article h3[id],article h4[id],article h5[id],article h6[id]').forEach(h => observer.observe(h));
             }
             const initial = <?php echo wp_json_encode($activeDialog); ?>; if (initial) show(initial);
         })();
-        </script></body></html><?php
-        self::respond(200, ['Content-Type' => 'text/html; charset=utf-8', 'Content-Security-Policy' => "default-src 'self'; img-src 'self' https: data:; style-src 'self'; script-src 'nonce-" . $scriptNonce . "'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'"], ob_get_clean());
+        </script></div><?php
+        if ($onPage) { WikiPresentation::footer(); } else { echo '</body></html>'; }
+        $headers = ['Content-Type'=>'text/html; charset=utf-8'];
+        // Theme headers/footers own their script/style policy; do not break them with our standalone CSP.
+        if (!$onPage) { $headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' https: data:; style-src 'self' 'nonce-" . $scriptNonce . "'; script-src 'nonce-" . $scriptNonce . "'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'"; }
+        self::respond(200, $headers, ob_get_clean());
     }
 }

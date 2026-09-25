@@ -1,3 +1,9 @@
+---
+name: most-important-details-for-knowledgerepo
+description: the most important details for this project is maintained here
+---
+
+
 # [AI-Skill] KnowledgeRepo
 
 ## Auftrag und Verbindlichkeit
@@ -5,6 +11,21 @@
 Dies ist die Übergabe für die Weiterpflege von **KornSW KnowledgeRepo**, WordPress-Stand **0.1.2**, und der korrespondierenden ASP.NET-Core-HTML-Oberfläche. Stand: 18.09.2026. Vor Änderungen den tatsächlich installierten Quellstand lesen. Diese Datei ist eine Projektdokumentation, kein Laufzeitbestandteil.
 
 **Lieferkonvention:** Nur geänderte bzw. neue Dateien einzeln zum Download liefern, jeweils vollständig. Keine ZIPs und keine kleinteiligen Ersetzen-Fragmente. Zum Abschluss für jede Datei Zielpfad und „ersetzen“ oder „neu hinzufügen“ nennen. Bei C# vollständige Klassen/Dateien liefern. Bestehende Library-Dateien unter derselben Identität aktualisieren. Kein Deployment, Release oder fremdes Repository ohne entsprechenden Auftrag verändern.
+
+**Self-Update und Versionsnummer werden von der Build-Pipeline gepflegt** (separates Projekt des Nutzers). Unmittelbar nach dem Check-in pflanzt sie in `kornsw-knowledgerepo.php` den `SELF-UPDATE`-Bootstrap-Block (`self-update.php`), `Update URI`/`Plugin URI` und die aktuelle `Version` wieder ein und pflegt `doc/versioninfo.json`, `doc/changelog.md`, `doc/kornsw-knowledgerepo.update.json`. Fehlt der Block oder steht eine ältere Version im Header (z. B. nach externem KI-Code), ist das **kein Fehler** und muss weder gemeldet noch manuell korrigiert werden. Diese Stellen nicht von Hand „reparieren“.
+
+## 0. Verhältnis zum .NET-Referenzprojekt (Vorgabe des Nutzers, verbindlich)
+
+Dieses Repository ist ein **WordPress/PHP-Nachbau** des .NET-Projekts https://github.com/SmartStandards/KnowledgeManagement (lokal: `C:\GIT\SmartStandards\KnowledgeManagement`). Es darf sich in **eigener Geschwindigkeit** entwickeln; es muss nicht jede Änderung dort sofort nachziehen.
+
+1. **Contract = 1:1, ohne Ausnahme.** Maßgeblich ist ausschließlich der dort liegende Vertrag:
+   - `dotnet/src/KnowledgeManagement/[Contract]/IKnowledgeRepository.cs`
+   - sowie die davon verwendeten Typen im selben Ordner: `ContentLevel.cs`, `KnowledgeAreaKind.cs`, `KnowledgeResourceIdChange.cs`, `KnowledgeResourceInfo.cs`, `IKnowledgeRepositoryCacheControl.cs`
+
+   Methodennamen, Parameter- und Out-Namen, Reihenfolge, Enum-Werte und dokumentierte Semantik (XML-Doc-Kommentare) müssen in `includes/Contract.php` und in der UJMW-Schnittstelle exakt gleich sein. Bei Abweichung gilt die .cs-Datei, nicht der PHP-Stand und nicht diese Übergabe.
+2. **Grob mittracken:** Plattformunabhängige Stolperfallen (Semantik, Sync-/Joplin-Fallen, Sicherheit, Cache-Korrektheit) sowie Anforderungen an Brauchbarkeit und UI aus den `doc/[AI-Skill] *.md` des Referenzprojekts „einigermaßen“ nachziehen. .NET-spezifische Details (DI, ASP.NET-Core, Data Protection usw.) nicht übertragen.
+3. **Unstimmigkeiten werden hier geführt.** Abweichungen, die sich aus der PHP/WordPress-Welt ergeben (Hosting, Hooks, Rollen, fehlende Libraries, Laufzeitmodell …), sind legitim und werden in diesem Repository diskutiert und dokumentiert.
+4. **Immer nachfragen, bevor eine Unstimmigkeit aufgelöst wird.** Weder den PHP-Stand eigenmächtig an .NET angleichen noch umgekehrt eine WordPress-Abweichung eigenmächtig festschreiben. Konflikt benennen, Optionen vorschlagen, Entscheidung des Nutzers abwarten. Einzige Ausnahme: ein eindeutiger Verstoß gegen den Contract (Punkt 1) – aber auch dann vor der Änderung Bescheid geben.
 
 ## 1. Ziel und Referenzen
 
@@ -112,6 +133,7 @@ Die CSS-Datei aus 0.1.2 ist die visuelle Referenz: helle Oberfläche, grüne Akz
 - Editor enthält kanonisches aggregiertes Markdown, keine bereits in HTTP-URLs umgeschriebenen Ressourcenreferenzen. Replace, sparse Append und Unterbereich anlegen bleiben verschiedene Aktionen.
 - Fehler im Editor erhalten Eingabe und Dialog. Provider-`false` ist ein normaler Ablehnungsfall.
 - Mobile Ansicht ohne horizontales Seitenoverflow; Code/Tabellen dürfen intern scrollen.
+- **Darstellungsmodi** (`display_mode`, nur WordPress, `includes/WikiPresentation.php`): `neutral` = eigenständige Seite, nur `wiki.css` (Referenzoptik). `themed` = eigenständig + `wiki-themed.css` + inline `--accent`. `on_page` = Theme-Header/-Footer (klassisch `get_header()`, Blocktheme über Template-Parts), `wiki-on-page.css` (auf `#kornsw-wiki` gescoped, `all:revert`) + `wiki-themed.css`; Body-Klasse `kornsw-wiki-page`; eigene CSP entfällt dort. Akzent: Admin-Feld `accent_color`, sonst Heuristik (Global-Styles-Linkfarbe → Kadence → Palette `primary`,`accent`,… → Theme-Mods), Filter `kornsw_kr_accent_color`. Alle Grüntöne außer `--accent` sind in `wiki-themed.css` per `color-mix()` abgeleitet – neue Farbwerte in `wiki.css` dort ebenfalls nachziehen. On-Page hebt die Breitenbegrenzung des Theme-Inhaltswrappers auf (volle Inhaltsbreite der Seite, nicht Viewport). Assets werden mit `filemtime` versioniert.
 - HTML/Suchergebnisdaten korrekt escapen. PHP: Parsedown SafeMode plus `wp_kses_post`. Inline-JavaScript mit frischem CSP-Nonce, kein `unsafe-inline` für Skripte. Browserantworten bleiben `no-cache`; der neue Cache ist serverseitig.
 - Admin blendet ausschließlich passende Providerfelder ein und deaktiviert versteckte Inputs. Leeres Secretfeld erhält vorhandenes Secret; Entfernen nur explizit. WordPress benötigt keine PAT-/Branch-/URL-Felder.
 

@@ -137,6 +137,18 @@ final class ConfiguredRepository extends TreeRepository {
     /** Decorate only links already present in the rendered, authorized repository document. */
     public static function decorate(\DOMDocument $dom, \DOMXPath $xpath, \DOMElement $wrapper, string $area): void {
         foreach (Auth::settings()['sources'] ?? [] as $source) {
+            if (($source['type'] ?? '') === 'urls' && ($source['show_source'] ?? true)) {
+                foreach ($source['entries'] ?? [] as $entry) {
+                    $path = Path::join(Path::join($source['mount'], $entry['mount'] ?? '/'), Path::segment($entry['alias']));
+                    if ($path !== $area) { continue; }
+                    $notice = $dom->createElement('p'); $notice->setAttribute('class', 'kr-source-credit');
+                    $notice->appendChild($dom->createTextNode('DISCLAIMER & THANKS: This content has been embedded from its original source, '));
+                    $link = $dom->createElement('a'); $link->setAttribute('href', $entry['url']); $link->setAttribute('target', '_blank'); $link->setAttribute('rel', 'noopener noreferrer');
+                    $link->appendChild($dom->createTextNode($entry['url'])); $notice->appendChild($link);
+                    $notice->appendChild($dom->createTextNode(', to help its wonderful authors share their knowledge. Please treat it as external content, which we do not continuously monitor. To the extent permitted by applicable law, we disclaim liability for the accuracy, completeness and currency of this third-party content and for any consequences of relying on it. This does not exclude any liability that cannot lawfully be excluded.'));
+                    $wrapper->insertBefore($notice, $wrapper->firstChild);
+                }
+            }
             if (($source['type'] ?? '') !== 'links' || Path::join($source['mount'], Path::segment($source['alias'])) !== $area) { continue; }
             foreach ($xpath->query('.//ul', $wrapper) as $list) {
                 $list->setAttribute('class', 'kr-link-directory ' . (($source['mode'] ?? 'list') === 'tiles' ? 'kr-link-tiles' : 'kr-link-list'));

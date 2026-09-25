@@ -3,6 +3,24 @@ namespace KornSW\KnowledgeRepo;
 
 /** GitHub object API provider. No checkout, clone, shell or persisted source files. */
 final class GitHubRepository extends TreeRepository {
+    /** Stable identities: URL reordering must not change resource IDs or cache scope. */
+    public static function multiEntries(array $source): array {
+        $entries = []; $names = [];
+        foreach (preg_split('/\r\n|\r|\n/', $source['urls'] ?? '') as $url) {
+            $url = trim($url); if ($url === '') { continue; }
+            if (!preg_match('~^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$~', $url, $m)) { throw new Failure('GitHub (multi): ungültige Repository-URL.', 400); }
+            $name = Path::name($m[2]); $canonical = 'https://github.com/' . $m[1] . '/' . $name;
+            $identity = hash('sha256', strtolower($canonical));
+            if (isset($entries[$identity])) { continue; }
+            if (isset($names[strtolower($name)])) { throw new Failure('GitHub (multi): Repository-Name mehrfach vergeben: ' . $name . '. Bitte getrennte Quellen/Mountpunkte verwenden.', 400); }
+            $names[strtolower($name)] = true;
+            $entry = $source; unset($entry['urls']);
+            $entry['type'] = 'github'; $entry['url'] = $canonical; $entry['mount'] = Path::join($source['mount'], $name); $entry['label'] = $name;
+            $entries[$identity] = $entry;
+        }
+        if (!$entries) { throw new Failure('GitHub (multi): mindestens eine Repository-URL angeben.', 400); }
+        return $entries;
+    }
     private $config; private $api; private $root; private $branch; private $head; private $tree;
     private $files = []; private $bytes = []; private $documents = []; private $loaded = false;
     public function __construct(array $config) {
@@ -12,17 +30,91 @@ final class GitHubRepository extends TreeRepository {
         $this->root = trim(Path::normalize($config['root'] ?? '/'), '/');
     }
     private function api(string $path, string $method = 'GET', ?array $body = null): array {
-        return Http::json($this->api . $path, $method, $body, $this->config['token'] ?? '', true);
+        $load = function () use ($path, $method, $body) { return Http::json($this->api . $path, $method, $body, $this->config['token'] ?? '', true); };
+        if ($this->writing || $method !== 'GET') { return $load(); }
+        return FileCache::remember('github-api:' . $path, $load, $this->config['_cache_scope'] ?? wp_json_encode($this->config), false);
     }
+    private $writing = false; private $directories = []; private $listed = []; private $docsLoaded = [];
     protected function load(): void {
         if ($this->loaded) { return; }
-        $state = FileCache::remember('github:' . wp_json_encode($this->config), function () {
-            try { $this->loadFresh(); } catch (\Throwable $e) { $this->loaded = false; throw $e; }
-            return ['nodes' => $this->nodes, 'files' => $this->files, 'documents' => $this->documents,
-                'bytes' => array_map('base64_encode', $this->bytes), 'branch' => $this->branch, 'head' => $this->head, 'tree' => $this->tree];
-        });
-        foreach (['nodes', 'files', 'documents', 'branch', 'head', 'tree'] as $key) { $this->$key = $state[$key]; }
-        $this->bytes = array_map('base64_decode', $state['bytes']); $this->loaded = true;
+        if ($this->writing) { $this->loadFresh(); return; }
+        $this->nodes = ['/'=> ['name' => $this->config['label'] ?? 'GitHub', 'level' => 0, 'text' => '', 'file' => '', 'indices' => null]];
+        $this->directories = []; $this->listed = []; $this->files = []; $this->documents = []; $this->docsLoaded = []; $this->bytes = [];
+        $this->loaded = true;
+    }
+    private function rootTree(): void {
+        if (isset($this->directories[''])) { return; }
+        $this->branch = $this->config['branch'] ?? '';
+        if ($this->branch === '') { $this->branch = $this->api('')['default_branch']; }
+        $commit = $this->api('/commits/' . rawurlencode($this->branch)); $this->head = $commit['sha']; $this->tree = $commit['commit']['tree']['sha'];
+        $sha = $this->tree;
+        foreach ($this->root === '' ? [] : explode('/', $this->root) as $part) {
+            $level = $this->api('/git/trees/' . $sha); $next = null;
+            foreach ($level['tree'] as $entry) { if ($entry['type'] === 'tree' && $entry['path'] === $part) { $next = $entry['sha']; break; } }
+            if ($next === null) { throw new Failure('GitHub-Einstiegsverzeichnis nicht gefunden.', 404); } $sha = $next;
+        }
+        $this->directories[''] = $sha;
+    }
+    private function listDirectory(string $dir): void {
+        if ($this->writing || isset($this->listed[$dir])) { return; }
+        $this->load(); $this->rootTree();
+        if (!isset($this->directories[$dir])) {
+            $parent = dirname($dir); $this->listDirectory($parent === '.' ? '' : $parent);
+        }
+        if (!isset($this->directories[$dir])) { throw new Failure('Verzeichnis nicht gefunden.', 404); }
+        $listing = $this->api('/git/trees/' . $this->directories[$dir]);
+        if (!empty($listing['truncated'])) { throw new Failure('GitHub-Verzeichnis unvollständig.', 503); }
+        $entries = $listing['tree']; usort($entries, static function ($a, $b) { return strcmp($a['path'], $b['path']); });
+        $parent = $this->addDirectory($dir);
+        foreach ($entries as $entry) {
+            if (strpos($entry['path'], '/') !== false || in_array($entry['path'], ['.', '..'], true)) { continue; }
+            $file = ($dir === '' ? '' : $dir . '/') . $entry['path'];
+            if ($entry['type'] === 'tree') { $this->directories[$file] = $entry['sha']; $this->addDirectory($file); continue; }
+            if ($entry['type'] !== 'blob' || $entry['mode'] === '120000') { continue; }
+            $this->files[$file] = $entry;
+            if (!preg_match('/\.md$/i', $file) || preg_match('/\.DELETED(?:\.\d+)?\.md$|\.Res\d+\./i', $file)) { continue; }
+            $name = substr($entry['path'], 0, -3); $p = Path::join($parent, Path::segment($name));
+            if (isset($this->nodes[$p]) && $this->nodes[$p]['file'] !== $file) { throw new Failure('Mehrdeutige Markdown-Dateinamen.'); }
+            $this->nodes[$parent]['level'] = 1;
+            $this->nodes[$p] = ['name' => $name, 'level' => 2, 'text' => '', 'file' => $file, 'indices' => []];
+        }
+        $this->listed[$dir] = true;
+    }
+    private function loadDocument(string $area): void {
+        $n = $this->nodes[$area]; $file = $n['file'];
+        if ($this->writing || isset($this->docsLoaded[$file])) { return; }
+        $tree = Markdown::parse($this->canonical($this->read($file), $file), $n['name']);
+        $this->documents[$file] = $tree; $this->nodes[$area]['text'] = $tree['text'];
+        $this->addHeadings($area, $tree, $file, []); $this->docsLoaded[$file] = true;
+    }
+    protected function node(string $area): array {
+        $this->load(); $area = Path::normalize($area);
+        if ($this->writing) { return parent::node($area); }
+        $p = '/';
+        foreach (array_filter(explode('/', $area), 'strlen') as $part) {
+            $this->children($p); $p = Path::join($p, $part);
+            if (!isset($this->nodes[$p])) { throw new Failure('Bereich nicht gefunden.', 404); }
+        }
+        return $this->nodes[$area];
+    }
+    protected function children(string $area): array {
+        $this->load();
+        if (!$this->writing) {
+            $n = $this->nodes[$area] ?? null;
+            if (!$n) { $n = $this->node($area); }
+            if ($n['indices'] === null) { $this->listDirectory($n['file']); }
+            elseif ($n['indices'] === []) { $this->loadDocument($area); }
+        }
+        return parent::children($area);
+    }
+    protected function walk(string $area): array {
+        $out = []; $stack = array_reverse($this->children($area));
+        while ($stack) { $p = array_pop($stack); $out[] = $p; foreach (array_reverse($this->children($p)) as $child) { $stack[] = $child; } }
+        return $out;
+    }
+    private function prepareContent(string $area): void {
+        $n = $this->node($area);
+        if (!$this->writing && $n['indices'] === []) { $this->loadDocument($area); }
     }
     private function loadFresh(): void {
         $this->branch = $this->config['branch'] ?? '';
@@ -60,6 +152,8 @@ final class GitHubRepository extends TreeRepository {
     private function resourcePath(string $id): string {
         if (strpos($id, '1.') !== 0) { throw new Failure('Unbekannte Ressourcen-ID.', 404); }
         $p = Path::unb64(substr($id, 2));
+        if (ltrim(Path::normalize($p), '/') !== $p || $p === '') { throw new Failure('Ressource nicht gefunden.', 404); }
+        if (!$this->writing) { $dir = dirname($p); $this->listDirectory($dir === '.' ? '' : $dir); }
         if (ltrim(Path::normalize($p), '/') !== $p || !isset($this->files[$p])) { throw new Failure('Ressource nicht gefunden.', 404); }
         return $p;
     }
@@ -76,7 +170,11 @@ final class GitHubRepository extends TreeRepository {
             if ($p === '..') { if (!$parts) { return null; } array_pop($parts); }
             elseif ($p !== '.' && $p !== '') { $parts[] = $p; }
         }
-        $p = implode('/', $parts); return isset($this->files[$p]) ? $p : null;
+        $p = implode('/', $parts);
+        if (!$this->writing && !isset($this->files[$p])) {
+            try { $dir = dirname($p); $this->listDirectory($dir === '.' ? '' : $dir); } catch (Failure $e) { if ($e->status !== 404) { throw $e; } }
+        }
+        return isset($this->files[$p]) ? $p : null;
     }
     private function canonical(string $text, string $file): string {
         return preg_replace_callback('~(!?\[[^\]\n]*\]\()([^\s)]+)([^)]*\))~', function ($m) use ($file) {
@@ -123,7 +221,9 @@ final class GitHubRepository extends TreeRepository {
         }
     }
     protected function caps(string $area): array {
-        $n = $this->node($area); $c = parent::caps($area);
+        $n = $this->node($area);
+        if (!$this->writing && $n['indices'] === null) { $this->listDirectory($n['file']); $n = $this->nodes[$area]; }
+        $c = parent::caps($area);
         if (empty($this->config['readonly'])) {
             $c['canBeRenamed'] = $c['canBeDeleted'] = $area !== '/';
             $c['canAddSubAreas'] = true;
@@ -132,12 +232,12 @@ final class GitHubRepository extends TreeRepository {
         return $c;
     }
     protected function aggregate(string $area): string {
-        $n = $this->node($area);
+        $this->prepareContent($area); $n = $this->node($area);
         if ($n['indices'] !== null) { $node = $this->documentNode($n); return Markdown::render($node); }
         $parts = [];
         foreach ($this->children($area) as $p) {
             $child = $this->node($p);
-            if ($child['indices'] === []) { $parts[] = Markdown::render($this->documents[$child['file']], 1); }
+            if ($child['indices'] === []) { $this->prepareContent($p); $parts[] = Markdown::render($this->documents[$child['file']], 1); }
         }
         return implode("\n\n", $parts);
     }
@@ -310,7 +410,20 @@ final class GitHubRepository extends TreeRepository {
         foreach ($tree['children'] as &$child) { $this->replaceIds($child, $changes); }
     }
     public function call(string $method, array $args = []): array {
-        if (!Contract::mutation($method)) { return parent::call($method, $args); }
+        if (!Contract::mutation($method)) {
+            $a = Contract::arguments($method, $args);
+            if (in_array($method, ['GetDirectContent', 'HasDirectContent'], true)) { $this->prepareContent($a['area']); }
+            if ($method === 'GetAreasByKeyword') {
+                $out = []; foreach ($this->walk($a['startArea']) as $p) { $this->prepareContent($p); $n = $this->node($p); if (mb_stripos($n['name'] . "\n" . $n['text'], $a['keyword']) !== false) { $out[] = $p; } }
+                return ['return' => $out];
+            }
+            return parent::call($method, $a);
+        }
+        $this->writing = true;
+        try { return $this->writeOperation($method, $args); }
+        finally { $this->writing = false; $this->loaded = false; FileCache::invalidate($this->config['_cache_scope'] ?? wp_json_encode($this->config)); }
+    }
+    private function writeOperation(string $method, array $args): array {
         $a = Contract::arguments($method, $args);
         if (!empty($this->config['readonly'])) { return Contract::failure($method); }
         for ($attempt = 0; $attempt < 3; $attempt++) {
@@ -330,7 +443,7 @@ final class GitHubRepository extends TreeRepository {
                 $commit = $this->api('/git/commits', 'POST', ['message' => 'KnowledgeRepository: ' . $method, 'tree' => $tree['sha'], 'parents' => [$this->head]]);
                 try {
                     $this->api('/git/refs/heads/' . str_replace('%2F', '/', rawurlencode($this->branch)), 'PATCH', ['sha' => $commit['sha'], 'force' => false]);
-                } finally { FileCache::invalidate(); }
+                } finally { FileCache::invalidate($this->config['_cache_scope'] ?? wp_json_encode($this->config)); }
                 $this->loaded = false; $this->bytes = []; return $result;
             } catch (Failure $e) {
                 $this->loaded = false; $this->bytes = [];

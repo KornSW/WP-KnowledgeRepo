@@ -1,0 +1,14 @@
+/* Display modes "themed" and "on_page": loaded after wiki.css / wiki-on-page.css.
+   Derives the formerly hard-coded green tints from --accent (set inline from the theme).
+   "html" prefix outranks the #kornsw-wiki rules of wiki-on-page.css. Without color-mix()
+   support the declarations are dropped and the neutral colors remain. */
+html #kornsw-wiki{--ink:color-mix(in srgb,var(--accent) 18%,#1b1d1f);--muted:color-mix(in srgb,var(--accent) 18%,#6c7075);--line:color-mix(in srgb,var(--accent) 12%,#e2e4e6)}
+html #kornsw-wiki .breadcrumbs li+li:before{color:color-mix(in srgb,var(--accent) 18%,#a8acb0)}
+html #kornsw-wiki .area-nav a[aria-current],html #kornsw-wiki .outline a[aria-current]{background:color-mix(in srgb,var(--accent) 10%,#fff)}
+html #kornsw-wiki .area-nav a:hover,html #kornsw-wiki .outline a:hover,html #kornsw-wiki article .kr-link-directory li a:hover{background:color-mix(in srgb,var(--accent) 6%,#fff)}
+html #kornsw-wiki pre{background:color-mix(in srgb,var(--accent) 5%,#f4f5f6)}
+html #kornsw-wiki .notice{background:color-mix(in srgb,var(--accent) 8%,#fff)}
+html #kornsw-wiki input,html #kornsw-wiki select,html #kornsw-wiki textarea{border-color:color-mix(in srgb,var(--accent) 20%,#c4c8cc)}
+html #kornsw-wiki #wiki-search input{border-color:var(--line)}
+html #kornsw-wiki dialog{box-shadow:0 24px 90px color-mix(in srgb,var(--accent) 22%,transparent)}
+html #kornsw-wiki dialog::backdrop{background:rgb(0 0 0 / .3)}

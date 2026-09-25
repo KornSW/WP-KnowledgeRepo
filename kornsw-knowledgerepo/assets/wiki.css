@@ -2,6 +2,7 @@
 
 .sidebar{align-self:start;position:sticky;top:24px;max-height:calc(100vh - 48px);overflow:auto}.sidebar .area-nav,.sidebar .outline{position:static;max-height:none;overflow:visible}.sidebar .outline{margin-top:28px;border-top:1px solid var(--line);padding-top:10px}.header-actions form{margin:0}@media(max-width:800px){.sidebar{position:static;max-height:none}.sidebar .outline{max-height:220px;overflow:auto}main{grid-row:auto}}
 .kr-search-highlight{background:#ffeb66;color:#202020;padding:0 .08em;border-radius:2px}
+.kr-source-credit{font-size:11px;line-height:1.5;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:12px;margin:0 0 20px;overflow-wrap:anywhere}
 article .kr-link-directory{list-style:none;padding:0;display:grid;gap:12px}
 article .kr-link-directory li{margin:0;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}
 article .kr-link-directory li a{display:flex;align-items:center;gap:14px;padding:16px;text-decoration:none;height:100%;box-sizing:border-box;overflow-wrap:anywhere}

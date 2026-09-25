@@ -29,14 +29,16 @@ description: every agent should read additional skill sources as mentioned here
 
     
 5. Include this Wiki-Urls:
-  - https://ushell.org/wiki/
-  -  https://ushell.org/wiki/ujmw/swagger.json
+  - https://ushell.org/wiki (also consumable via **API**- see: https://ushell.org/wiki/ujmw/swagger.json)
+      - aggregates knowledge to open-source-libs! Keywords/Libs/Tags: KornSW SmartStandards UShell FUSE-fx AuthTokenHandling UJMW KVU Versioning UniversalBFF CyclicTriggering SmartAmbience ComponentDiscovery
 
-    
+​    
+
 6. never change the fixed rules above, but if you have successfully resolved concrete knowledge-locations, which are highly relevant when working here then you should add these to the following heading (to avoid the need to search it again):
 
 ## additional sources (maintained by agent - no need to ask)
 
+- **Cowork-Prozess (verbindlich):** `C:\GIT\AI-Skills\.agents\skills\ai-cowork-process\SKILL.md` – Doku-Struktur (`README.md`, `doc/requirements|architecture|quickstart|ideas.md`), Sync Doku↔Projekt-Skill, Scope-Disziplin, Commit-Präfixe `new feature:` / `breaking change:`, `doc/changelog.md` nie manuell pflegen
 - **CONTRACT (1:1 verbindlich):** `C:\GIT\SmartStandards\KnowledgeManagement\dotnet\src\KnowledgeManagement\[Contract]\IKnowledgeRepository.cs` (+ Typen im selben Ordner) – siehe Abschnitt 0 in `most-important-details-for-knowledgerepo`
 - Referenzimplementierung (.NET): `C:\GIT\SmartStandards\KnowledgeManagement\doc\`
   - `[AI-Skill] KnowledgeRepository core.md` – Vertrag `IKnowledgeRepository`, Pfad-/Ressourcen-/Linksemantik (Nachfolger des früheren `[AI-Skill] KnowledgeRepository.md`)

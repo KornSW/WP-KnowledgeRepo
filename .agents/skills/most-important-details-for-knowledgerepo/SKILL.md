@@ -45,6 +45,10 @@ Immer ein Aggregator vor beliebig vielen Providerinstanzen. Jeder Eintrag besitz
 | `includes/Contract.php` | Methoden/Parameter, Failure, Pfadkonventionen, Markdownbaum, TreeRepository |
 | `includes/Aggregator.php` | Mounts, virtuelle Vorfahren, Overlays, opake Ressourcen, Fehlerisolation |
 | `includes/WordPressRepository.php` | veröffentlichte Beiträge ausgewählter Kategorien, nur lesend |
+| `includes/ConfiguredRepository.php` | Provider `urls` (URL-Dokumente) und `links` (Linkliste), nur lesend, Download erst bei Inhaltszugriff |
+| `includes/SearchSession.php` | Wiki-Suche als vom Browser getaktete Sitzung (`/_search`, dann `/_search/<id>`), verschlüsselter Zustand im Cacheverzeichnis |
+| `includes/OpenApi.php` | generiert `/wiki/ujmw/swagger.json` aus `Contract::METHODS` |
+| `includes/WikiPresentation.php` | Darstellungsmodi, Akzentfarben-Heuristik (siehe Abschnitt 6) |
 | `includes/GitHubRepository.php` | GitHub-Objekt-API, Markdownstruktur und Commit-Transaktionen |
 | `includes/Http.php` | HTTPS-JSON-Transport, UJMW-RemoteRepository |
 | `includes/FileCache.php` | verschlüsselter Dateisystem-Cache, TTL, Generation, Locks |
@@ -196,7 +200,7 @@ SyncStore separat, verschlüsselt, atomare Zustandsdatei, Profil-Lock mit 503 be
 
 - PHP-Tests wurden mit simuliertem WordPress/GitHub ausgeführt, keine Live-Abnahme des Nutzerhostings/Joplin. Version 0.1.2: Syntaxprüfung sowie 21 bestehende Regressionen, zusätzliche Cache/Auth- und WordPress-Cachetests unter PHP 8.5.10. Frühere Versionen zusätzlich PHP 8.1.34.
 - Die mit 0.1.0 gelieferten Standalone-Testdateien benötigen für 0.1.2 zusätzliche FileCache-Includes/WordPress-Stubs; damalige Tests wurden über angepasste lokale Harnesses ausgeführt. Nicht behaupten, dass alte Testdateien unverändert standalone laufen.
-- Frühere `doc/ARCHITEKTUR.md`/`ABNAHME.md` nennen noch „kein Cache“, „kein anonymer UJMW“, „kein JavaScript“. Diese Aussagen sind für 0.1.2 überholt; diese Übergabe hat Vorrang.
+- Menschenlesbare Doku folgt seit 25.09.2026 dem `ai-cowork-process`: `README.md`, `doc/requirements.md`, `doc/architecture.md`, `doc/quickstart.md` (inkl. Fehlerdiagnose und Live-Abnahme-Matrix), `doc/ideas.md`. Die früheren `ARCHITEKTUR.md`, `ABNAHME.md`, `TESTERGEBNIS.txt`, `UJMW-VERTRAG.md` (Stand 0.1.0) sind darin aufgegangen und gelöscht. Statische API-Doku gibt es bewusst nicht; maßgeblich ist das generierte `/wiki/ujmw/swagger.json` (`includes/OpenApi.php`).
 - Kein echtes GitHub-Schreiben beim Testen. GitHub-API-Limits, Branchschutz, SSO und Netzwerkausfälle auf Zielsystem separat prüfen.
 - Einzelrequests/Ressourcen 16 MiB, SyncState vor Verschlüsselung 128 MiB; keine Großmediathek.
 - Markdownbaum und Ressourceninterpretation sind kein vollständiger CommonMark-Parser. Reference-style-/HTML-Ressourcenreferenzen nicht umfassend modelliert.

@@ -3,17 +3,21 @@ namespace KornSW\KnowledgeRepo;
 
 final class Admin {
     public static function boot(): void {
-        add_action('admin_menu', static function () { add_options_page('KnowledgeRepo (KornSW)', 'KnowledgeRepo (KornSW)', 'manage_options', 'kornsw-knowledgerepo', [self::class, 'page']); });
+        add_action('admin_menu', static function () {
+            // Pages uses position 20; 21 keeps KnowledgeRepo directly below it.
+            add_menu_page('KnowledgeRepo (KornSW)', 'KnowledgeRepo', 'manage_options', 'kornsw-knowledgerepo', [self::class, 'page'], 'dashicons-book-alt', 21);
+        });
         add_action('admin_post_kornsw_kr_save', [self::class, 'save']);
         add_filter('plugin_action_links_' . plugin_basename(KORNSW_KR_FILE), static function ($links) {
-            array_unshift($links, '<a href="' . esc_url(admin_url('options-general.php?page=kornsw-knowledgerepo')) . '">Einstellungen</a>'); return $links;
+            array_unshift($links, '<a href="' . esc_url(admin_url('admin.php?page=kornsw-knowledgerepo')) . '">Einstellungen</a>'); return $links;
         });
     }
     public static function save(): void {
         if (!current_user_can('manage_options')) { wp_die('Nicht erlaubt.', '', ['response' => 403]); }
         check_admin_referer('kornsw_kr_save');
         $input = wp_unslash($_POST); $old = Auth::settings();
-        $settings = ['jwt_ttl' => max(300, min(31536000, (int) ($input['jwt_ttl'] ?? 86400))), 'permissions' => [], 'sources' => []];
+        $settings = ['jwt_ttl' => max(300, min(31536000, (int) ($input['jwt_ttl'] ?? 86400))),
+            'auth_cache_ttl' => max(0, min(300, (int) ($input['auth_cache_ttl'] ?? 30))), 'permissions' => [], 'sources' => []];
         foreach (array_merge(['anonymous'], array_keys(wp_roles()->roles)) as $role) {
             foreach (['page', 'joplin', 'ujmw'] as $channel) {
                 $settings['permissions'][$role][$channel] = max(0, min($role === 'anonymous' ? 1 : 2, (int) ($input['permissions'][$role][$channel] ?? 0)));
@@ -43,9 +47,10 @@ final class Admin {
             }
             update_option('kornsw_kr_settings', $settings, false);
             FileCache::invalidate();
-            if (!empty($input['rotate'])) { update_option('kornsw_kr_jwt_secret', Path::b64(random_bytes(48)), false); }
+            Auth::invalidateIntrospection();
+            if (!empty($input['rotate'])) { update_option('kornsw_kr_jwt_secret', Path::b64(random_bytes(48)), true); }
         } catch (Failure $e) { wp_die(esc_html($e->getMessage()), 'Einstellungen nicht gespeichert', ['back_link' => true]); }
-        wp_safe_redirect(admin_url('options-general.php?page=kornsw-knowledgerepo&saved=1')); exit;
+        wp_safe_redirect(admin_url('admin.php?page=kornsw-knowledgerepo&saved=1')); exit;
     }
     private static function source(array $source, string $index): void {
         $base = 'sources[' . $index . ']'; $type = $source['type'] ?? 'wordpress';
@@ -100,7 +105,7 @@ final class Admin {
         }
         echo '</tbody></table><p>Anonymous verwendet bei Joplin <code>anonymous</code> / <code>anonymous</code>. Bei freigegebenem anonymem UJMW-Lesezugriff darf der Authorization-Header leer bleiben. Ungültige Tokens werden weiterhin abgelehnt.</p>';
         echo '<h2>Cache</h2><p><label>Lebensdauer (Stunden) <input type="number" min="0" max="168" step="0.25" name="cache_hours" value="' . esc_attr((string) (($s['cache_ttl'] ?? 14400) / 3600)) . '"></label></p><p>Standard: 4 Stunden. 0 deaktiviert den Cache. Angemeldete Benutzer können ihn im Wiki über Aktualisieren verwerfen.</p>';
-        echo '<h2>Tokens</h2><p><label>Gültigkeit (Sekunden) <input type="number" min="300" max="31536000" name="jwt_ttl" value="' . (int) ($s['jwt_ttl'] ?? 86400) . '"></label></p><p><label><input type="checkbox" name="rotate" value="1"> Alle bisher ausgestellten Tokens widerrufen</label></p>';
+        echo '<h2>Tokens</h2><p><label>Gültigkeit (Sekunden) <input type="number" min="300" max="31536000" name="jwt_ttl" value="' . (int) ($s['jwt_ttl'] ?? 86400) . '"></label></p><p><label>Benutzer-/Rollenprüfung zwischenspeichern (Sekunden) <input type="number" min="0" max="300" name="auth_cache_ttl" value="' . (int) ($s['auth_cache_ttl'] ?? 30) . '"></label><br><span class="description">Standard: 30 Sekunden. 0 prüft Benutzer, Rollen und Widerruf bei jedem UJMW-Aufruf erneut. Signatur und Ablauf werden immer geprüft.</span></p><p><label><input type="checkbox" name="rotate" value="1"> Alle bisher ausgestellten Tokens widerrufen</label></p>';
         echo '<h2>Quellen und Mountpunkte</h2><p>Reihenfolge entspricht der Lesereihenfolge im Aggregator. Mehrfachbelegungen sind als Overlay lesbar; mehrdeutige Schreibziele werden abgelehnt.</p><div id="kr-sources">';
         foreach ($s['sources'] ?? [] as $id => $source) { self::source($source, $id); }
         echo '</div><button type="button" class="button" id="kr-add">Quelle hinzufügen</button><template id="kr-template">'; self::source([], '__INDEX__'); echo '</template>';

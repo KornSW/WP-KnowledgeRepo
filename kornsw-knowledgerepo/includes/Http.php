@@ -6,7 +6,7 @@ final class Http {
         if (strtolower((string) parse_url($url, PHP_URL_SCHEME)) !== 'https' || parse_url($url, PHP_URL_USER) || parse_url($url, PHP_URL_PASS)) {
             throw new Failure('Remote-Endpunkte müssen HTTPS ohne Zugangsdaten in der URL verwenden.', 400);
         }
-        $agent = 'KornSW-WordPress-KnowledgeRepo/0.1.2';
+        $agent = 'KornSW-WordPress-KnowledgeRepo/0.1.5';
         $site = preg_replace('/[\r\n]/', '', home_url('/'));
         if ($site !== '') { $agent .= ' (+' . $site . ')'; }
         $headers = ['Accept' => 'application/json', 'Content-Type' => 'application/json', 'User-Agent' => $agent];
@@ -57,12 +57,6 @@ final class RemoteRepository implements Repository {
             if ($method !== 'GetAreaCapabilities' && !array_key_exists('return', $result)) { throw new Failure('Unvollständige UJMW-Antwort.', 502); }
             return $result;
         };
-        if (Contract::mutation($method)) {
-            try { return $load(); } finally { FileCache::invalidate(); }
-        }
-        $result = FileCache::remember('ujmw:' . wp_json_encode([$this->config, $token, $method, $args]), $load);
-        if (!empty($result['fault'])) { throw new Failure('Der externe Wissensdienst meldet einen Fehler.', 502); }
-        if ($method !== 'GetAreaCapabilities' && !array_key_exists('return', $result)) { throw new Failure('Unvollständige UJMW-Antwort.', 502); }
-        return $result;
+        return $load();
     }
 }

@@ -2,7 +2,14 @@
 namespace KornSW\KnowledgeRepo;
 
 final class Auth {
+    private static $introspectionHit = false;
     public static function settings(): array { return get_option('kornsw_kr_settings', []); }
+    public static function introspectionHit(): bool { return self::$introspectionHit; }
+    public static function invalidateIntrospection(...$args): void {
+        try { $epoch = bin2hex(random_bytes(16)); }
+        catch (\Throwable $e) { $epoch = hash('sha256', microtime(true) . ':' . mt_rand()); }
+        update_option('kornsw_kr_auth_epoch', $epoch, true);
+    }
     public static function header(): string {
         return trim($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
     }
@@ -35,8 +42,55 @@ final class Auth {
     }
     private static function secret(): string {
         $secret = get_option('kornsw_kr_jwt_secret', '');
-        if ($secret === '') { $new = Path::b64(random_bytes(48)); add_option('kornsw_kr_jwt_secret', $new, '', false); $secret = get_option('kornsw_kr_jwt_secret'); }
+        if ($secret === '') { $new = Path::b64(random_bytes(48)); add_option('kornsw_kr_jwt_secret', $new, '', true); $secret = get_option('kornsw_kr_jwt_secret'); }
         return $secret;
+    }
+    private static function principal(int $id, array $roles): object {
+        $principal = new \stdClass(); $principal->ID = $id; $principal->roles = array_values($roles); return $principal;
+    }
+    /** Cache only WordPress user existence, roles and revocation version. JWT crypto/time checks stay per request. */
+    private static function introspect(string $token, array $claims): object {
+        self::$introspectionHit = false;
+        $ttl = max(0, min(300, (int) (self::settings()['auth_cache_ttl'] ?? 30)));
+        if ($ttl === 0) {
+            $user = get_user_by('id', (int) $claims['sub']);
+            if (!$user || (int) ($claims['ver'] ?? -1) !== (int) get_user_meta($user->ID, 'kornsw_kr_token_version', true)) { throw new Failure('Token widerrufen.', 401); }
+            return self::principal((int) $user->ID, array_values(array_filter($user->roles, 'is_string')));
+        }
+        $epoch = (string) get_option('kornsw_kr_auth_epoch', '0');
+        $root = FileCache::root() . '/auth-v1';
+        $id = hash_hmac('sha256', $token, wp_salt('auth')); $file = $root . '/' . $id . '.cache';
+        if ($ttl > 0) {
+            // Authentication must continue through WordPress if an object-cache plugin or the
+            // optional filesystem cache is unavailable. The cache is only an optimization.
+            try { $cached = function_exists('wp_cache_get') ? wp_cache_get($id, 'kornsw_kr_auth') : false; }
+            catch (\Throwable $e) { $cached = false; }
+            if (!is_array($cached)) {
+                try { $cached = FileCache::read($file); }
+                catch (\Throwable $e) { $cached = false; }
+            }
+            if ($cached && ($cached['epoch'] ?? '') === $epoch && (int) ($cached['until'] ?? 0) >= time()
+                && (int) ($cached['id'] ?? 0) === (int) $claims['sub'] && (int) ($cached['ver'] ?? -1) === (int) ($claims['ver'] ?? -2)
+                && isset($cached['roles']) && is_array($cached['roles'])) {
+                self::$introspectionHit = true; return self::principal((int) $cached['id'], $cached['roles']);
+            }
+        }
+        $user = get_user_by('id', (int) $claims['sub']);
+        if (!$user || (int) ($claims['ver'] ?? -1) !== (int) get_user_meta($user->ID, 'kornsw_kr_token_version', true)) {
+            throw new Failure('Token widerrufen.', 401);
+        }
+        $roles = array_values(array_filter($user->roles, 'is_string'));
+        if ($ttl > 0) {
+            $record = ['epoch'=>$epoch, 'until'=>min((int) $claims['exp'], time() + $ttl),
+                'id'=>(int) $user->ID, 'roles'=>$roles, 'ver'=>(int) ($claims['ver'] ?? -1)];
+            try {
+                if (function_exists('wp_cache_set')) { wp_cache_set($id, $record, 'kornsw_kr_auth', $ttl); }
+            } catch (\Throwable $e) { /* Cache failures must not reject a valid token. */ }
+            try {
+                if (is_dir($root) || wp_mkdir_p($root)) { @chmod($root, 0700); FileCache::write($file, $record); }
+            } catch (\Throwable $e) { /* Cache failures must not reject a valid token. */ }
+        }
+        return self::principal((int) $user->ID, $roles);
     }
     public static function issue(): array {
         $user = wp_get_current_user();
@@ -52,7 +106,8 @@ final class Auth {
         return ['token' => $payload . '.' . Path::b64(hash_hmac('sha256', $payload, self::secret(), true)), 'expires' => $expires];
     }
     public static function bearer(): array {
-        if (self::header() === '') { return ['user' => new \WP_User(0), 'token' => '']; }
+        self::$introspectionHit = false;
+        if (self::header() === '') { return ['user' => self::principal(0, []), 'token' => '']; }
         if (!preg_match('/^(?:Bearer\s+)?([A-Za-z0-9_.-]+)$/i', self::header(), $m) || strlen($m[1]) > 8192) { throw new Failure('JWT erforderlich.', 401); }
         $parts = explode('.', $m[1]);
         if (count($parts) !== 3) { throw new Failure('Ungültiger Token.', 401); }
@@ -63,8 +118,7 @@ final class Auth {
             || ($claims['iss'] ?? '') !== home_url('/wiki/') || ($claims['aud'] ?? '') !== 'KornSW-KnowledgeRepo'
             || !is_int($claims['exp'] ?? null) || $claims['exp'] <= time() || ($claims['nbf'] ?? PHP_INT_MAX) > time()
             || !ctype_digit((string) ($claims['sub'] ?? ''))) { throw new Failure('Token ungültig oder abgelaufen.', 401); }
-        $user = get_user_by('id', (int) $claims['sub']);
-        if (!$user || (int) ($claims['ver'] ?? -1) !== (int) get_user_meta($user->ID, 'kornsw_kr_token_version', true)) { throw new Failure('Token widerrufen.', 401); }
+        $user = self::introspect($m[1], $claims);
         return ['user' => $user, 'token' => $m[1]];
     }
     public static function protectSecret(string $value): string {

@@ -55,6 +55,9 @@ class Failure extends \RuntimeException {
     public function __construct(string $message, int $status = 409) { parent::__construct($message); $this->status = $status; }
 }
 final class Path {
+    /** Single-pass transport escaping; logical repository identities never change. */
+    public static function transport(string $path): string { return strtr($path, ['~'=>'~7E', '%'=>'~25']); }
+    public static function fromTransport(string $path): string { return strtr($path, ['~7E'=>'~', '~25'=>'%']); }
     public static function normalize(string $path): string {
         if (preg_match('/[\x00-\x1f\\\\]/', $path)) { throw new Failure('Ungültiger Pfad.', 400); }
         $parts = explode('/', trim($path, '/'));

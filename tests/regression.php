@@ -11,17 +11,20 @@ function home_url($p = '') { return 'https://test.invalid' . $p; }
 function sanitize_file_name($s) { return preg_replace('/[^a-zA-Z0-9_.-]/', '-', $s); }
 function wp_check_filetype($p) { return ['type' => str_ends_with($p, '.png') ? 'image/png' : 'application/octet-stream']; }
 function is_wp_error($v) { return false; }
+function wp_remote_retrieve_header($r, $key) { return ''; }
 function wp_remote_retrieve_response_code($r) { return $r['status']; }
 function wp_remote_retrieve_body($r) { return json_encode($r['body']); }
-$GLOBALS['options'] = [];
+$GLOBALS['options'] = ['kornsw_kr_settings'=>['cache_ttl'=>0]];
 function get_option($k, $default = false) { return $GLOBALS['options'][$k] ?? $default; }
 function add_option($k, $v, $a = '', $b = false) { if (isset($GLOBALS['options'][$k])) { return false; } $GLOBALS['options'][$k] = $v; return true; }
 function update_option($k, $v, $a = false) { $GLOBALS['options'][$k] = $v; }
 function get_user_meta($id, $k, $single = true) { return $GLOBALS['usermeta'][$id][$k] ?? 0; }
 function get_current_user_id() { return 7; }
 function wp_get_current_user() { return (object) ['ID' => 7, 'roles' => ['editor']]; }
-function get_user_by($key, $value) { return $value === 7 ? wp_get_current_user() : false; }
+$GLOBALS['user_by_calls'] = 0;
+function get_user_by($key, $value) { $GLOBALS['user_by_calls']++; return $value === 7 ? wp_get_current_user() : false; }
 require __DIR__ . '/../kornsw-knowledgerepo/includes/Contract.php';
+require __DIR__ . '/../kornsw-knowledgerepo/includes/FileCache.php';
 require __DIR__ . '/../kornsw-knowledgerepo/includes/Http.php';
 require __DIR__ . '/../kornsw-knowledgerepo/includes/GitHubRepository.php';
 require __DIR__ . '/../kornsw-knowledgerepo/includes/Aggregator.php';
@@ -31,10 +34,11 @@ use KornSW\KnowledgeRepo\{Contract, Markdown, Path, GitHubRepository, Aggregator
 
 /** A GitHub object service simulator with a real blob/tree/commit/ref publication boundary. */
 final class GitService {
-    public $files = []; public $blobs = []; public $trees = []; public $commits = []; public $head = 'head0'; public $counter = 0; public $published = 0; public $race = false; public $fail = false;
+    public $requests = []; public $files = []; public $blobs = []; public $trees = []; public $commits = []; public $head = 'head0'; public $counter = 0; public $published = 0; public $race = false; public $fail = false;
     public function __construct(array $files) { $this->files = $files; }
     public function blob(string $bytes): string { $sha = sha1('blob ' . strlen($bytes) . "\0" . $bytes); $this->blobs[$sha] = $bytes; return $sha; }
     public function request(string $url, array $args): array {
+        $this->requests[] = [$url, $args['method']];
         if ($this->fail) { return ['status' => 503, 'body' => []]; }
         $p = substr(parse_url($url, PHP_URL_PATH), strlen('/repos/test/repo')); $method = $args['method']; $body = json_decode($args['body'] ?? '{}', true); $status = 200; $r = [];
         if ($p === '') { $r = ['default_branch' => 'main']; }
@@ -72,7 +76,7 @@ function repo($readonly = false) { return new GitHubRepository(['url' => 'https:
 function run($name, $fn) { $fn(); echo 'PASS ' . $name . "\n"; }
 function resetGit($files = null) { $GLOBALS['git'] = new GitService($files ?? ['doc/One.md' => "Intro\n\n# First\nA\n\n## Nested\nB\n\n# Second\nC\n", 'doc/Other.md' => "Unchanged\r\n", 'outside.md' => 'Outside']); }
 function rawItem($id, $name, $parent, $body, $type = 1, $extra = '') { return $name . ($body !== '' ? "\n\n" . $body : '') . "\n\nid: $id\nparent_id: $parent\n" . $extra . "type_: $type"; }
-function setupDav($write = true) { $r = repo(); $s = new SyncStore('tester', bin2hex(random_bytes(4))); $h = new Joplin($r, $s, $write, '/wiki/joplin/test'); return [$r, $s, $h]; }
+function setupDav($write = true) { $r = repo(); $s = new SyncStore('tester', bin2hex(random_bytes(4))); $h = new Joplin($r, $s, $write, '/wiki/joplin/test'); $h->project(); return [$r, $s, $h]; }
 
 run('Markdown sparse merge preserves missing branches and order; fences are opaque', function () {
     $tree = Markdown::parse("First\n\n# A\nOne\n\n# B\n```md\n# Not a heading\n```\n");
@@ -169,12 +173,12 @@ run('Joplin conflict rebind preserves source and changes identity', function () 
     expect(count($GLOBALS['git']->files) === 1, 'Duplicated content');
 });
 run('JWT validates signature, current permissions and token revocation', function () {
-    $GLOBALS['options']['kornsw_kr_settings'] = ['jwt_ttl' => 600, 'permissions' => ['editor' => ['page' => 1, 'ujmw' => 2]]];
+    $GLOBALS['options']['kornsw_kr_settings'] = ['cache_ttl'=>0, 'auth_cache_ttl'=>0, 'jwt_ttl' => 600, 'permissions' => ['editor' => ['page' => 1, 'ujmw' => 2]]];
     $token = Auth::issue()['token']; $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . $token;
     expect(Auth::bearer()['user']->ID === 7, 'Valid JWT rejected');
     $GLOBALS['options']['kornsw_kr_settings']['permissions']['editor']['ujmw'] = 0;
     expect(Auth::permission('ujmw', Auth::bearer()['user']) === 0, 'Stale role permission');
-    $GLOBALS['usermeta'][7]['kornsw_kr_token_version'] = 1; $failed = false;
+    $GLOBALS['usermeta'][7]['kornsw_kr_token_version'] = 1; Auth::invalidateIntrospection(); $failed = false;
     try { Auth::bearer(); } catch (Failure $e) { $failed = true; }
     expect($failed, 'Revoked token accepted');
 });

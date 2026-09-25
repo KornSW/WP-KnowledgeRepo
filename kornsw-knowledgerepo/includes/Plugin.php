@@ -2,11 +2,14 @@
 namespace KornSW\KnowledgeRepo;
 
 final class Plugin {
+    private static $ujmwTimings = null;
+    private static $ujmwResponseHit = false;
     public static function activate(): void {
         foreach (['dom', 'mbstring', 'openssl', 'fileinfo'] as $extension) {
             if (!extension_loaded($extension)) { wp_die('KornSW KnowledgeRepo benötigt die PHP-Erweiterung ' . esc_html($extension) . '.'); }
         }
-        add_option('kornsw_kr_settings', ['cache_ttl' => 14400, 'jwt_ttl' => 86400, 'sources' => [], 'permissions' => ['administrator' => ['page' => 2, 'joplin' => 2, 'ujmw' => 2], 'anonymous' => ['page' => 0, 'joplin' => 0, 'ujmw' => 0]]], '', false);
+        add_option('kornsw_kr_settings', ['cache_ttl' => 14400, 'jwt_ttl' => 86400, 'auth_cache_ttl' => 30, 'sources' => [], 'permissions' => ['administrator' => ['page' => 2, 'joplin' => 2, 'ujmw' => 2], 'anonymous' => ['page' => 0, 'joplin' => 0, 'ujmw' => 0]]], '', false);
+        add_option('kornsw_kr_auth_epoch', '0', '', true);
     }
     public static function boot(): void {
         Admin::boot();
@@ -23,13 +26,16 @@ final class Plugin {
             try {
                 $source['token'] = Auth::revealSecret($source['token'] ?? '');
                 if ($source['type'] === 'ujmw' && $source['token'] === '[PASS-TROUGH]' && $incoming === '' && !$ujmw) { continue; }
+                $scope = hash('sha256', wp_json_encode([$id, $source, $source['token'] === '[PASS-TROUGH]' ? $incoming : '']));
+                $source['_cache_scope'] = $scope;
                 switch ($source['type']) {
                     case 'wordpress': $mount['repo'] = new WordPressRepository($source); break;
                     case 'github': $mount['repo'] = new GitHubRepository($source); break;
                     case 'ujmw': $mount['repo'] = new RemoteRepository($source, $incoming, $ujmw); break;
                     default: throw new Failure('Unbekannter Quellentyp.', 500);
                 }
-            } catch (Failure $e) {
+                $mount['repo'] = new CachedRepository($mount['repo'], $scope, $tolerant);
+            } catch (\Throwable $e) {
                 if (!$tolerant) { throw $e; }
                 $mount['error'] = $e;
             }
@@ -37,8 +43,45 @@ final class Plugin {
         }
         return new Aggregator($mounts, $tolerant);
     }
+    /** Called only after current-request authentication and role checks in route(). */
+    public static function ujmwCall(string $method, array $args, string $incoming = '', $principal = null): array {
+        $args = Contract::arguments($method, $args);
+        foreach (['area', 'startArea', 'contentAreaToMove', 'newParentArea'] as $field) {
+            if (isset($args[$field])) { $args[$field] = Path::normalize($args[$field]); }
+        }
+        self::$ujmwResponseHit = false;
+        if (Contract::mutation($method)) { return self::repository($incoming, false, true)->call($method, $args); }
+        $settings = Auth::settings(); $passThrough = false;
+        foreach ($settings['sources'] ?? [] as $source) {
+            if (($source['type'] ?? '') === 'ujmw' && ($source['token'] ?? '') === '[PASS-TROUGH]') { $passThrough = true; break; }
+        }
+        $user = $principal ?? wp_get_current_user(); $roles = $user->roles; sort($roles, SORT_STRING);
+        // Identical local user permissions can reuse answers across reissued local JWTs.
+        // Forwarded credentials must retain exact token isolation.
+        $scope = 'ujmw-response-v1:' . hash('sha256', wp_json_encode([$settings, (int) $user->ID, $roles, $passThrough ? $incoming : '']));
+        $loaded = false;
+        $value = FileCache::remember($method . ':' . wp_json_encode($args), static function () use ($method, $args, $incoming, &$loaded) {
+            $loaded = true; $warnings = FileCache::warningVersion();
+            $repo = self::repository($incoming, true, true); $result = $repo->call($method, $args);
+            return ['result'=>$result, 'complete'=>!$repo->errors() && FileCache::warningVersion() === $warnings];
+        }, $scope, false, static function ($v) { return $v['complete']; });
+        self::$ujmwResponseHit = !$loaded;
+        return $value['result'];
+    }
+    /** Numeric diagnostics only; never include users, paths, queries or credentials. */
+    public static function ujmwTimingHeader(): string {
+        if (self::$ujmwTimings === null) { return ''; }
+        $rows = []; $stats = FileCache::statistics();
+        foreach (self::$ujmwTimings as $name=>$ms) { $rows[] = $name . ';dur=' . number_format(max(0, $ms), 2, '.', ''); }
+        $rows[] = 'kr_lock;dur=' . number_format($stats['lock_ms'], 2, '.', '');
+        $rows[] = 'kr_response_cache;desc="' . (self::$ujmwResponseHit ? 'hit' : 'miss') . '"';
+        $rows[] = 'kr_auth_cache;desc="' . (Auth::introspectionHit() ? 'hit' : 'miss') . '"';
+        foreach (['hit','miss','stale'] as $name) { $rows[] = 'kr_cache_' . $name . ';desc="' . $stats[$name] . '"'; }
+        return implode(', ', $rows);
+    }
     private static function respond(int $status, array $headers, string $body): void {
         status_header($status); nocache_headers();
+        $timing = self::ujmwTimingHeader(); if ($timing !== '') { header('Server-Timing: ' . $timing); }
         header('X-Content-Type-Options: nosniff'); header('Referrer-Policy: same-origin');
         foreach ($headers as $key => $value) { header($key . ': ' . $value); }
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'HEAD') { echo $body; }
@@ -72,17 +115,24 @@ final class Plugin {
             }
             if (strpos($relative, '/ujmw/') === 0) {
                 $json = true;
+                self::$ujmwTimings = ['kr_boot'=>(microtime(true) - ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000];
                 if ($method !== 'POST') { throw new Failure('UJMW benötigt POST.', 405); }
                 if (!preg_match('~^/ujmw/(?:IKnowledgeRepository/)?([A-Za-z]+)/*$~', $relative, $match)) { throw new Failure('UJMW-Operation fehlt.', 404); }
-                $auth = Auth::bearer(); $level = Auth::requireAccess('ujmw', $auth['user']); wp_set_current_user($auth['user']->ID);
+                $authStart = microtime(true);
+                try { $auth = Auth::bearer(); $level = Auth::requireAccess('ujmw', $auth['user']); }
+                finally { self::$ujmwTimings['kr_auth'] = (microtime(true) - $authStart) * 1000; }
                 $operation = $match[1];
                 if (Contract::mutation($operation) && $level !== 2) { throw new Failure('Schreibzugriff nicht erlaubt.', 403); }
                 $a = json_decode(self::body(), true);
                 if (!is_array($a)) { throw new Failure('JSON-Objekt erwartet.', 400); }
-                $r = self::repository($auth['token'], false, true)->call($operation, $a);
-                self::respond(200, ['Content-Type' => 'application/json; charset=utf-8'], wp_json_encode($r));
+                $repoStart = microtime(true);
+                try { $r = self::ujmwCall($operation, $a, $auth['token'], $auth['user']); }
+                finally { self::$ujmwTimings['kr_repo'] = (microtime(true) - $repoStart) * 1000; }
+                $jsonStart = microtime(true); $payload = wp_json_encode($r);
+                self::$ujmwTimings['kr_json'] = (microtime(true) - $jsonStart) * 1000;
+                self::respond(200, ['Content-Type' => 'application/json; charset=utf-8'], $payload);
             }
-            if ($relative === '/_search') { $json = true; }
+            if ($relative === '/_search' || strpos($relative, '/_search/') === 0) { $json = true; }
             $level = Auth::requireAccess('page');
             if (strpos($relative, '/_resource/') === 0) {
                 if (!in_array($method, ['GET', 'HEAD'], true)) { throw new Failure('Methode nicht erlaubt.', 405); }
@@ -94,27 +144,28 @@ final class Plugin {
                 $inline = in_array($mime, ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'], true);
                 self::respond(200, ['Content-Type' => $inline ? $mime : 'application/octet-stream', 'Content-Disposition' => $inline ? 'inline' : 'attachment; filename="resource"', 'Content-Security-Policy' => "default-src 'none'; sandbox"], $bytes);
             }
-            if ($relative === '/_search') {
-                $json = true;
+            if ($relative === '/_search' || strpos($relative, '/_search/') === 0) {
                 if ($method !== 'GET') { throw new Failure('Suche benötigt GET.', 405); }
-                $query = trim(sanitize_text_field(wp_unslash($_GET['q'] ?? '')));
-                if (mb_strlen($query) > 200) { throw new Failure('Suchbegriff ist zu lang.', 400); }
-                $repo = self::repository('', true);
-                self::respond(200, ['Content-Type' => 'application/json; charset=utf-8'], wp_json_encode(self::search($repo, $query)));
+                if ($relative === '/_search') {
+                    $query = trim(sanitize_text_field(wp_unslash($_GET['q'] ?? '')));
+                    if (mb_strlen($query) > 200) { throw new Failure('Suchbegriff ist zu lang.', 400); }
+                    $result = SearchSession::start($query);
+                } else { $result = SearchSession::poll(substr($relative, strlen('/_search/')), static function () { return self::repository('', true); }); }
+                self::respond(200, ['Content-Type'=>'application/json; charset=utf-8'], wp_json_encode($result));
             }
             $token = null; $message = ''; $activeDialog = '';
-            $area = Path::normalize(rawurldecode($relative ?: '/')); $repo = self::repository('', true);
+            $area = Path::normalize(Path::fromTransport(rawurldecode($relative ?: '/'))); $repo = new UiRepository(self::repository('', true));
             if ($method === 'POST') {
                 $nonce = sanitize_text_field(wp_unslash($_POST['_wpnonce'] ?? ''));
                 if (!is_user_logged_in() || !wp_verify_nonce($nonce, 'kornsw_kr_wiki')) { throw new Failure('Sitzung abgelaufen. Bitte Seite neu laden.', 403); }
                 $action = $_POST['kr_action'] ?? '';
                 $activeDialog = in_array($action, ['token', 'revoke'], true) ? 'api-dialog' : 'edit-dialog';
                 if ($action === 'refresh') {
-                    FileCache::invalidate(); wp_safe_redirect(self::link($area), 303); exit;
+                    FileCache::refresh(); wp_safe_redirect(self::link($area), 303); exit;
                 }
                 if ($action === 'token') { $token = Auth::issue(); }
                 elseif ($action === 'revoke') {
-                    $uid = get_current_user_id(); update_user_meta($uid, 'kornsw_kr_token_version', (int) get_user_meta($uid, 'kornsw_kr_token_version', true) + 1); $message = 'Deine bisherigen Tokens wurden widerrufen.';
+                    $uid = get_current_user_id(); update_user_meta($uid, 'kornsw_kr_token_version', (int) get_user_meta($uid, 'kornsw_kr_token_version', true) + 1); Auth::invalidateIntrospection(); $message = 'Deine bisherigen Tokens wurden widerrufen.';
                 } else {
                     if ($level !== 2) { throw new Failure('Schreibzugriff nicht erlaubt.', 403); }
                     $args = ['area' => $area];
@@ -142,11 +193,12 @@ final class Plugin {
             self::respond($e->status, $headers, $json ? wp_json_encode(['fault' => $e->getMessage()]) : $e->getMessage());
         }
     }
-    private static function link(string $area): string { return home_url('/wiki' . implode('/', array_map('rawurlencode', explode('/', $area)))); }
+    public static function link(string $area): string { return home_url('/wiki' . implode('/', array_map('rawurlencode', explode('/', Path::transport($area))))); }
     /** Breadcrumb/page navigation stops at the first content container. */
     public static function documentArea(Repository $repo, string $area): string {
         $chain = []; $path = Path::normalize($area);
         while ($path !== '/') { $chain[] = $path; $path = Path::parent($path); }
+        $chain[] = '/';
         foreach (array_reverse($chain) as $candidate) {
             $level = $repo->call('GetAreaCapabilities', ['area' => $candidate])['contentLevel'];
             if (in_array($level, [2, 'ContentContainer'], true)) { return $candidate; }
@@ -164,7 +216,13 @@ final class Plugin {
         $dom->loadHTML('<?xml encoding="utf-8" ?><div id="kr-body">' . $html . '</div>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
         libxml_clear_errors(); libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($dom); $wrapper = $dom->getElementById('kr-body');
-        $children = $repo->call('GetAreas', ['recurse' => true, 'startArea' => $area])['return'];
+        $children = []; $seen = [$area=>true];
+        $stack = array_reverse($repo->call('GetAreas', ['recurse'=>false, 'startArea'=>$area])['return']);
+        while ($stack) {
+            $child = array_pop($stack); if (isset($seen[$child]) || !Path::contains($area, $child)) { continue; }
+            $seen[$child] = true; $children[] = $child;
+            foreach (array_reverse($repo->call('GetAreas', ['recurse'=>false, 'startArea'=>$child])['return']) as $next) { $stack[] = $next; }
+        }
         $names = [];
         foreach ($children as $child) {
             $name = $repo->call('GetAreaName', ['area' => $child])['return'];
@@ -187,23 +245,6 @@ final class Plugin {
         foreach ($wrapper->childNodes as $node) { $html .= $dom->saveHTML($node); }
         return ['text' => $text, 'html' => $html, 'outline' => $outline, 'anchors' => $anchors];
     }
-    public static function search(Repository $repo, string $query): array {
-        $results = []; $views = []; $matches = $query === '' ? [] : $repo->call('GetAreasByKeyword', ['keyword' => $query, 'startArea' => '/'])['return'];
-        foreach (array_slice($matches, 0, 100) as $area) {
-            $document = self::documentArea($repo, $area); $anchor = '';
-            if ($document !== $area) {
-                if (!isset($views[$document])) { $views[$document] = self::documentView($repo, $document); }
-                $anchor = $views[$document]['anchors'][$area] ?? '';
-            }
-            $snippet = preg_replace('/\s+/', ' ', strip_tags($repo->call('GetDirectContent', ['area' => $area])['return']));
-            $position = mb_stripos($snippet, $query);
-            $start = $position === false ? 0 : max(0, $position - 70);
-            $results[] = ['title' => $repo->call('GetAreaName', ['area' => $area])['return'], 'path' => $area,
-                'url' => self::link($document) . ($anchor !== '' ? '#' . $anchor : ''),
-                'snippet' => ($start ? '…' : '') . mb_substr($snippet, $start, 220) . (mb_strlen($snippet) > $start + 220 ? '…' : '')];
-        }
-        return ['results' => $results, 'more' => count($matches) > 100, 'warnings' => $repo instanceof Aggregator ? $repo->errors() : []];
-    }
     private static function dialogStart(string $id, string $title): void {
         echo '<dialog id="' . esc_attr($id) . '" aria-labelledby="' . esc_attr($id . '-title') . '"><div class="dialog-head"><h2 id="' . esc_attr($id . '-title') . '">' . esc_html($title) . '</h2><button type="button" class="quiet close-dialog" aria-label="Schließen">×</button></div>';
     }
@@ -220,9 +261,9 @@ final class Plugin {
         $crumbs = ['/'=>'Wissen'] + array_reverse($crumbs, true);
         $canEdit = $permission === 2 && is_user_logged_in(); $canToken = is_user_logged_in() && Auth::permission('ujmw') > 0;
         $scriptNonce = base64_encode(random_bytes(18));
-        $errors = $repo instanceof Aggregator ? $repo->errors() : [];
+        $errors = method_exists($repo, 'errors') ? $repo->errors() : FileCache::warnings();
         ob_start();
-        ?><!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?php echo esc_html($title); ?> · Wissen</title><link rel="stylesheet" href="<?php echo esc_url(plugins_url('assets/wiki.css', KORNSW_KR_FILE) . '?ver=0.1.2'); ?>"></head><body>
+        ?><!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?php echo esc_html($title); ?> · Wissen</title><link rel="stylesheet" href="<?php echo esc_url(plugins_url('assets/wiki.css', KORNSW_KR_FILE) . '?ver=0.1.3'); ?>"></head><body>
         <header class="site-header"><a class="brand" href="<?php echo esc_url(home_url('/wiki/')); ?>">Wissen</a><div class="header-actions">
         <form id="wiki-search" role="search" action="<?php echo esc_url(home_url('/wiki/_search')); ?>"><input type="search" name="q" maxlength="200" aria-label="Wissen durchsuchen" placeholder="Wissen durchsuchen …" required><button type="submit" class="quiet">Suchen</button></form>
         <?php if (is_user_logged_in()) { ?><form method="post" action="<?php echo esc_url(self::link($area)); ?>"><?php wp_nonce_field('kornsw_kr_wiki'); ?><button class="quiet" name="kr_action" value="refresh" title="Quellen neu laden">Aktualisieren</button></form><?php } ?>
@@ -243,7 +284,7 @@ final class Plugin {
         }
         ?></aside></div><main><h1><?php echo esc_html($title); ?></h1><?php
         if ($errors) {
-            echo '<details class="source-status"><summary>' . count($errors) . ' Quelle(n) momentan nicht verfügbar</summary><ul>';
+            echo '<details class="source-status"><summary>Einige Inhalte sind momentan nicht aktuell oder verfügbar</summary><ul>';
             foreach ($errors as $error) { echo '<li><strong>' . esc_html($error['label']) . '</strong>: ' . esc_html($error['message']) . '</li>'; }
             echo '</ul></details>';
         }
@@ -281,25 +322,47 @@ final class Plugin {
                 const r = dialog.getBoundingClientRect();
                 if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close();
             }));
-            let controller;
+            let controller, timer;
+            const stopSearch = () => { clearTimeout(timer); if (controller) controller.abort(); controller = null; };
+            const searchDialog = document.getElementById('search-dialog');
+            searchDialog.addEventListener('close', stopSearch);
+            searchDialog.addEventListener('cancel', stopSearch);
+            window.addEventListener('pagehide', stopSearch);
             document.getElementById('wiki-search').addEventListener('submit', async event => {
                 event.preventDefault(); const form = event.currentTarget; const query = form.elements.q.value.trim(); if (!query) return;
-                if (controller) controller.abort(); const active = new AbortController(); controller = active;
+                stopSearch(); const active = new AbortController(); controller = active;
                 const status = document.getElementById('search-status'); const results = document.getElementById('search-results');
+                let displayed = 0;
                 results.replaceChildren(); status.textContent = 'Suche läuft …'; show('search-dialog');
-                try {
-                    const response = await fetch(form.action + '?q=' + encodeURIComponent(query), {credentials: 'same-origin', signal: active.signal, headers: {'Accept': 'application/json'}});
-                    const data = await response.json(); if (!response.ok) throw new Error(data.fault || 'Suche derzeit nicht verfügbar.');
-                    if (controller !== active) return;
-                    status.textContent = data.results.length + ' Treffer für „' + query + '“' + (data.more ? ' (erste 100)' : '');
-                    data.results.forEach(result => {
+                const request = async url => {
+                    const response = await fetch(url, {credentials:'same-origin', signal:active.signal, headers:{'Accept':'application/json'}});
+                    const data = await response.json(); if (!response.ok) throw new Error(data.fault || 'Suche derzeit nicht verfügbar.'); return data;
+                };
+                const render = data => {
+                    data.results.slice(displayed).forEach(result => {
                         const card = document.createElement('div'); card.className = 'search-result'; const link = document.createElement('a');
-                        link.href = result.url; link.textContent = result.title; link.addEventListener('click', () => document.getElementById('search-dialog').close());
+                        link.href = result.url; link.textContent = result.title; link.addEventListener('click', () => { stopSearch(); searchDialog.close(); });
                         const path = document.createElement('small'); path.textContent = result.path; const snippet = document.createElement('p'); snippet.textContent = result.snippet;
                         card.append(link, path, snippet); results.append(card);
                     });
-                    (data.warnings || []).forEach(warning => { const p = document.createElement('p'); p.className = 'muted'; p.textContent = warning.label + ': ' + warning.message; results.append(p); });
-                } catch (error) { if (error.name !== 'AbortError') status.textContent = error.message || 'Suche derzeit nicht verfügbar.'; }
+                    displayed = data.results.length;
+                    status.textContent = data.resultCount + ' Treffer · ' + data.processed + ' Bereiche geprüft' + (data.more ? ' · Trefferlimit 30 erreicht' : data.completed ? ' · Suche abgeschlossen' : ' · Suche läuft …');
+                    if (data.completed && (data.warnings || []).length) status.textContent += ' · Einzelne Quellen waren nicht verfügbar';
+                };
+                const fail = error => { if (controller === active && error.name !== 'AbortError') status.textContent = error.message || 'Suche derzeit nicht verfügbar.'; };
+                const poll = async id => {
+                    if (controller !== active || !searchDialog.open) return;
+                    try {
+                        const data = await request(form.action + '/' + encodeURIComponent(id));
+                        if (controller !== active || !searchDialog.open) return;
+                        render(data); if (!data.completed) timer = setTimeout(() => poll(id), 750);
+                    } catch (error) { fail(error); }
+                };
+                try {
+                    const data = await request(form.action + '?q=' + encodeURIComponent(query));
+                    if (controller !== active || !searchDialog.open) return;
+                    render(data); if (!data.completed) timer = setTimeout(() => poll(data.id), 750);
+                } catch (error) { fail(error); }
             });
             const outlineLinks = [...document.querySelectorAll('.outline a')];
             if ('IntersectionObserver' in window && outlineLinks.length) {

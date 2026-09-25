@@ -1,13 +1,13 @@
 {
-  "currentVersionWithSuffix": "1.0.3",
+  "currentVersionWithSuffix": "1.0.4",
   "releaseType": "",
-  "currentVersion": "1.0.3",
+  "currentVersion": "1.0.4",
   "currentMajor": 1,
   "currentMinor": 0,
-  "currentFix": 3,
-  "previousVersion": "1.0.2",
+  "currentFix": 4,
+  "previousVersion": "1.0.3",
   "changeGrade": "fix",
-  "versionTimeInfo": "08:26:28",
+  "versionTimeInfo": "14:34:18",
   "versionDateInfo": "2026-09-25",
-  "versionNotes": "- new Feature: additonal providers\n"
+  "versionNotes": "- **MVP** state reached!\n- weiterentwicklung\n- dokue umarrangiert\n- doku umarrangiert\n- new Feature: wiki display modes (themed / on-page)\n"
 }

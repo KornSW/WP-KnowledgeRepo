@@ -4,6 +4,15 @@
 
 *(none)*
 
+## v 1.0.4
+released **2026-09-25**, including:
+ - **MVP** state reached!
+ - weiterentwicklung
+ - dokue umarrangiert
+ - doku umarrangiert
+ - new Feature: wiki display modes (themed / on-page)
+
+
 ## v 1.0.3
 released **2026-09-25**, including:
  - new Feature: additonal providers

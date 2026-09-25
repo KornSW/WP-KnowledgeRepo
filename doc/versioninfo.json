@@ -1,13 +1,13 @@
 {
-  "currentVersionWithSuffix": "1.0.1",
+  "currentVersionWithSuffix": "1.0.2",
   "releaseType": "",
-  "currentVersion": "1.0.1",
+  "currentVersion": "1.0.2",
   "currentMajor": 1,
   "currentMinor": 0,
-  "currentFix": 1,
-  "previousVersion": "1.0.0",
+  "currentFix": 2,
+  "previousVersion": "1.0.1",
   "changeGrade": "fix",
-  "versionTimeInfo": "11:28:14",
-  "versionDateInfo": "2026-09-18",
-  "versionNotes": "- added skilldoc\n"
+  "versionTimeInfo": "06:59:02",
+  "versionDateInfo": "2026-09-25",
+  "versionNotes": "- finetuning 1\n"
 }

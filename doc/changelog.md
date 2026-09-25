@@ -4,6 +4,11 @@
 
 *(none)*
 
+## v 1.0.3
+released **2026-09-25**, including:
+ - new Feature: additonal providers
+
+
 ## v 1.0.2
 released **2026-09-25**, including:
  - finetuning 1

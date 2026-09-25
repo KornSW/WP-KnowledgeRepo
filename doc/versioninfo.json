@@ -1,13 +1,13 @@
 {
-  "currentVersionWithSuffix": "1.0.2",
+  "currentVersionWithSuffix": "1.0.3",
   "releaseType": "",
-  "currentVersion": "1.0.2",
+  "currentVersion": "1.0.3",
   "currentMajor": 1,
   "currentMinor": 0,
-  "currentFix": 2,
-  "previousVersion": "1.0.1",
+  "currentFix": 3,
+  "previousVersion": "1.0.2",
   "changeGrade": "fix",
-  "versionTimeInfo": "06:59:02",
+  "versionTimeInfo": "08:26:28",
   "versionDateInfo": "2026-09-25",
-  "versionNotes": "- finetuning 1\n"
+  "versionNotes": "- new Feature: additonal providers\n"
 }

@@ -48,6 +48,7 @@ Immer ein Aggregator vor beliebig vielen Providerinstanzen. Jeder Eintrag besitz
 | `includes/ConfiguredRepository.php` | Provider `urls` (URL-Dokumente) und `links` (Linkliste), nur lesend, Download erst bei Inhaltszugriff |
 | `includes/SearchSession.php` | Wiki-Suche als vom Browser getaktete Sitzung (`/_search`, dann `/_search/<id>`), verschlüsselter Zustand im Cacheverzeichnis |
 | `includes/OpenApi.php` | generiert `/wiki/ujmw/swagger.json` aus `Contract::METHODS` |
+| `includes/Raw.php` | `/wiki/raw/` nach .NET-`KnowledgeRepositoryRawController`, aber **nur GET** (Nutzerentscheid 25.09.2026) und Kanal `page` statt JWT; Aggregationen liefern nur Navigation, nie `GetAggregatedContent` |
 | `includes/WikiPresentation.php` | Darstellungsmodi, Akzentfarben-Heuristik (siehe Abschnitt 6) |
 | `includes/GitHubRepository.php` | GitHub-Objekt-API, Markdownstruktur und Commit-Transaktionen |
 | `includes/Http.php` | HTTPS-JSON-Transport, UJMW-RemoteRepository |
@@ -66,7 +67,12 @@ Provider kennen keine Joplin-IDs. UI und Joplin kennen keine GitHub-Dateipfade. 
 ## 3. Semantik des Repositories
 
 - Absolute logische Pfade ab `/`. Pfadsegmente sind providerabhängig; sichtbare Namen über `GetAreaName` erfragen.
-- Reihenfolge ist Fachsemantik: Depth-first Pre-order mit natürlicher Geschwisterreihenfolge. Nicht pauschal alphabetisch sortieren.
+- Reihenfolge ist Fachsemantik: Depth-first Pre-order mit natürlicher Geschwisterreihenfolge. Nicht pauschal alphabetisch sortieren. **Ausnahme im Aggregator (Nutzervorgabe 25.09.2026):**
+  - Die Root-Ebene wird alphabetisch sortiert (`strnatcasecmp` auf `GetAreaName`).
+  - Tiefere Mountpunkte werden vor dem ersten Geschwister eingefügt, das alphabetisch danach kommt.
+  - Die Reihenfolge innerhalb einer Quelle bleibt unangetastet, auch wenn sie unsortiert ist.
+  - Das ist eine WordPress-seitige Abweichung zum .NET-Aggregator.
+- Linkliste mit Tags (`links[].tags`): Alias wird Aggregation (Level 1), je Tag eine Container-Seite, ungetaggte Links auf einer Seite namens wie der Alias. Ohne Tags bleibt die alte Form (eine Container-Seite), damit bestehende URLs/Sync-IDs stabil bleiben. Admin überträgt die Link-Tabelle als ein JSON-Feld `links_json` (wegen `max_input_vars`).
 - ContentLevel: `0 BeyondContent`, `1 ContentAggregation`, `2 ContentContainer`. Aggregation besitzt keinen direkten Text.
 - Canonical Ressourcenreferenz: `knowledge-resource:<opaque-id>`.
 - Append ist **sparsamer hierarchischer Merge**, kein schlichtes Anhängen an eine Datei. Gleichnamige direkte Kinder rekursiv zusammenführen; vorhandene, im Payload nicht erwähnte Zweige erhalten; neue Geschwister hinten ergänzen. Mehrdeutige Überschriften ablehnen.
@@ -110,6 +116,7 @@ Ohne eingehenden UJMW-Kontext werden Pass-through-Quellen im Wiki/Joplin ausgela
 | Wiki | `/wiki/<area>` | WordPress-Sitzung und Kanal `page` |
 | Suche | `/wiki/_search?q=...` | dieselbe Seitenberechtigung |
 | Ressourcen | `/wiki/_resource/<id>` | dieselbe Seitenberechtigung |
+| RAW (nur GET) | `/wiki/raw/<area>`, `/wiki/raw/resources/<id>` | dieselbe Seitenberechtigung |
 | Joplin | `/wiki/joplin/<profile>/` | WordPress-Basic oder `anonymous`/`anonymous` |
 | UJMW | `/wiki/ujmw/IKnowledgeRepository/<Operation>` | eigener JWT oder freigegebener anonymer Zugang |
 
@@ -128,7 +135,7 @@ Frühes `init`-Routing vor Theme/Canonical Redirects. Unterverzeichnisinstallati
 Die CSS-Datei aus 0.1.2 ist die visuelle Referenz: helle Oberfläche, grüne Akzente, Systemschrift, kompakter Kopf, dezente Aktionen, Kartenfläche für Inhalt.
 
 - Oben links „Wissen“; rechts Suchfeld sowie kleine Aktionen Aktualisieren, Bearbeiten, API-Zugang (letztere nur WordPress).
-- Suchergebnisse in einem nativen Dialog, keine eigene Suchseite. Maximal 100 Treffer, Suchbegriff maximal 200 Zeichen. Native Repositorysuche verwenden.
+- Suchergebnisse in einem nativen Dialog, keine eigene Suchseite. **Maximal 30 Treffer** (Nutzerentscheid 25.09.2026, bewusst weniger als die 100 der .NET-Fassade), Suchbegriff maximal 200 Zeichen. Die Suche läuft als vom Browser getaktete `SearchSession`: Der Baum wird schrittweise mit Zeitbudget je Heartbeat durchlaufen, Treffer erscheinen nach und nach.
 - Breadcrumb-Leiste statt Zurück-Pfeil. Breadcrumb endet am Dokument.
 - Links Bereiche; **darunter** „Auf dieser Seite“ als Dokumentgliederung. Seit 0.1.2 nicht mehr rechts.
 - Erste ContentContainer-Area entlang der Ahnenkette bildet ein Dokument. Unter-Container sind Überschriften, keine separaten Seiten. Aufruf eines solchen Pfades leitet zum Dokument mit Fragment um.
@@ -151,6 +158,12 @@ Implementiert:
 2. GitHub speichert Nodes, Datei-/Dokumenttabellen, Branch/Head/Tree und bereits gelesene Bytes (Base64 im Snapshot). Mutationen umgehen den Snapshot.
 3. UJMW cached einzelne erfolgreiche Vertragsantworten nach Methode, kanonischen Argumenten, Quellkonfiguration und effektivem Token. Keine Token-übergreifende Freigabe von Antworten.
 4. TreeRepository erzeugt für einen rekursiven Walk einmal einen Eltern→Kinder-Index statt quadratischer wiederholter Vollscans.
+5. **Lazy Aggregator (25.09.2026):**
+   - **Problem vorher:** `Aggregator::load()` rief bei *jedem* Request für jede Quelle `GetAreas(recurse:true)` auf. `CachedRepository` zerlegte das in einen gecachten `GetAreas`-Aufruf pro Knoten. Bei GitHub lud das jedes Verzeichnis und jeden Blob, denn Überschriften sind Areas. Ein kalter Cache bedeutete eine Datei pro Knoten.
+   - **Jetzt – Besitz:** Wem ein Bereich gehört, ergibt sich aus den Mountpunkten plus der Kinderliste des Elternbereichs in der Quelle (`sourceHas`, top-down, memoisiert).
+   - **Keine Existenzprüfung per 404:** `FileCache` cached keine Fehler, jeder 404 ginge also bei jedem Request erneut an die Quelle.
+   - **Rekursive Aufrufe:** Joplin, UJMW-recurse und Keyword-Suche machen `prefetch()`, also genau einen rekursiven Aufruf je betroffener Quelle. `CachedRepository` cached rekursive Listen als *einen* Eintrag.
+   - **Nicht zurückbauen:** Der Aggregator darf keinen globalen Baum mehr pro Request aufbauen.
 
 `kornsw_kr_settings.cache_ttl`: Sekunden, Default **14400**. Admin zeigt Stunden, 0 deaktiviert, Maximum 168 Stunden. `KORNSW_KR_CACHE_DIR` optional als absoluter privater Pfad; Default `WP_CONTENT_DIR/kornsw-knowledge-cache`.
 
@@ -199,7 +212,10 @@ SyncStore separat, verschlüsselt, atomare Zustandsdatei, Profil-Lock mit 503 be
 ## 10. Bekannte Grenzen und Prüfung
 
 - PHP-Tests wurden mit simuliertem WordPress/GitHub ausgeführt, keine Live-Abnahme des Nutzerhostings/Joplin. Version 0.1.2: Syntaxprüfung sowie 21 bestehende Regressionen, zusätzliche Cache/Auth- und WordPress-Cachetests unter PHP 8.5.10. Frühere Versionen zusätzlich PHP 8.1.34.
-- Die mit 0.1.0 gelieferten Standalone-Testdateien benötigen für 0.1.2 zusätzliche FileCache-Includes/WordPress-Stubs; damalige Tests wurden über angepasste lokale Harnesses ausgeführt. Nicht behaupten, dass alte Testdateien unverändert standalone laufen.
+- Stand 25.09.2026, geprüft unter PHP 8.1:
+  - `tests/regression.php` (21 Szenarien) und `tests/aggregator-links.php` laufen unverändert standalone.
+  - `tests/wordpress-provider.php` scheitert am fehlenden `FileCache`-Stub.
+- Auf dem Entwicklerrechner (Windows) gibt es kein natives PHP. Funktionierender Weg: `@php-wasm/node` plus `@php-wasm/universal` per Node-Skript. Wichtig ist `loadNodeRuntime('8.1', { emscriptenOptions: { processId: 1 } })`, dazu das Repo per `createNodeFsMountHandler` mounten. `npx @php-wasm/cli` hat unter Windows einen Pfad-Bug (`C:\C:\…`).
 - Menschenlesbare Doku folgt seit 25.09.2026 dem `ai-cowork-process`: `README.md`, `doc/requirements.md`, `doc/architecture.md`, `doc/quickstart.md` (inkl. Fehlerdiagnose und Live-Abnahme-Matrix), `doc/ideas.md`. Die früheren `ARCHITEKTUR.md`, `ABNAHME.md`, `TESTERGEBNIS.txt`, `UJMW-VERTRAG.md` (Stand 0.1.0) sind darin aufgegangen und gelöscht. Statische API-Doku gibt es bewusst nicht; maßgeblich ist das generierte `/wiki/ujmw/swagger.json` (`includes/OpenApi.php`).
 - Kein echtes GitHub-Schreiben beim Testen. GitHub-API-Limits, Branchschutz, SSO und Netzwerkausfälle auf Zielsystem separat prüfen.
 - Einzelrequests/Ressourcen 16 MiB, SyncState vor Verschlüsselung 128 MiB; keine Großmediathek.

@@ -29,14 +29,21 @@ Das Plugin ist ein WordPress/PHP-Nachbau des .NET-Projekts [SmartStandards/Knowl
   - **GitHub (multi)** – mehrere Repositories mit gemeinsamen Einstellungen; jedes erscheint unter `<Mountpunkt>/<Repo-Name>`.
   - **UJMW-Client** – ein entfernter `IKnowledgeRepository`-Dienst mit festem JWT oder durchgereichtem Aufrufer-Token (`[PASS-TROUGH]`).
   - **URL-Dokumente** – einzelne Markdown-/Text-/HTML-Dokumente von beliebigen HTTP(S)-URLs, nur lesend, mit optionalem Quellverweis.
-  - **Linkliste** – eine Seite mit Links als Liste oder Kacheln, nur lesend.
+  - **Linkliste** – Links als Liste oder Kacheln, nur lesend. Links können kommaseparierte Tags tragen. Dann wird die Liste zu einem Ordner mit je einer Seite pro Tag; Links ohne Tag stehen auf einer Seite mit dem Namen der Liste.
 - Mehrdeutige Schreibziele und providerübergreifende Verschiebungen werden abgelehnt.
+- **Reihenfolge:**
+  - Die oberste Ebene ist alphabetisch sortiert.
+  - Tiefer liegende Mountpunkte werden alphabetisch zwischen die Bereiche der übergeordneten Quelle einsortiert, und zwar vor dem ersten Geschwister, das alphabetisch danach kommt.
+  - Die Reihenfolge innerhalb einer Quelle bleibt unverändert, auch wenn sie nicht alphabetisch ist.
+- **Pflege im Admin:**
+  - Quellen erscheinen als Liste in einer eigenen Spalte links; rechts wird die ausgewählte Quelle bearbeitet (Master/Detail).
+  - Linklisten werden in einer kompakten, filterbaren Tabelle gepflegt. Hinzufügen und Entfernen geschieht ohne Seitenneuladen; auch sehr viele Links sind möglich.
 
 ### Wiki
 
 - Aufruf unter `/wiki/…`; Navigation links, darunter die Gliederung „Auf dieser Seite“, Breadcrumb oben.
 - Der erste Inhaltscontainer entlang eines Pfades bildet ein Dokument; tiefere Container erscheinen als Überschriften mit Anker.
-- Suche im Dialog; Ergebnisse erscheinen schrittweise, die Treffermenge ist begrenzt.
+- Suche im Dialog; Ergebnisse erscheinen schrittweise, höchstens 30 Treffer (Suchbegriff maximal 200 Zeichen).
 - Bearbeiten (Ersetzen, sparsames Anfügen, Unterbereich anlegen), Aktualisieren (Cache verwerfen) und API-Zugang (JWT erzeugen/widerrufen) als dezente Dialoge.
 - Drei Darstellungsmodi: **Neutral** (eigene Optik), **Themed** (Akzentfarbe des Themes) und **On-Page** (im Theme-Header/-Footer eingebettet).
 - Mobile Darstellung ohne horizontales Scrollen der Seite.
@@ -50,7 +57,16 @@ Das Plugin ist ein WordPress/PHP-Nachbau des .NET-Projekts [SmartStandards/Knowl
 ### UJMW
 
 - Endpunkt `/wiki/ujmw/IKnowledgeRepository/<Operation>`, eine Operation pro POST, Vertrag identisch zur .NET-Schnittstelle.
-- Maschinenlesbare Beschreibung unter `/wiki/ujmw/swagger.json` (OpenAPI 3, aus dem Code erzeugt).
+- Maschinenlesbare Beschreibung unter `/wiki/ujmw/swagger.json` (OpenAPI 3, aus dem Code erzeugt). Der Dialog „API-Zugang“ im Wiki verlinkt sie.
+
+### RAW
+
+- `/wiki/raw/…` spiegelt den gesamten Wissensbaum als einfaches, selbstbeschreibendes Markdown für Menschen und einfache Agents. Vorbild ist der .NET-`KnowledgeRepositoryRawController`.
+  - Navigationsbereiche liefern eine Liste der direkten Unterbereiche mit absoluten URLs.
+  - Inhaltsdokumente liefern ihr vollständiges Markdown.
+  - Ressourcen stehen unter `/wiki/raw/resources/<id>`.
+- **Nur lesend** (GET), abweichend von .NET: Dort gibt es zusätzlich POST (Append) und DELETE (Truncate).
+- Berechtigung wie im Wiki: Kanal „Seite“, also WordPress-Sitzung bzw. anonyme Seitenfreigabe.
 
 ### Berechtigungen
 
@@ -61,7 +77,7 @@ Das Plugin ist ein WordPress/PHP-Nachbau des .NET-Projekts [SmartStandards/Knowl
 ## Nicht-funktionale Anforderungen
 
 - **Keine Zusatzsoftware auf dem Host:** kein Git, kein Composer, kein separater Dienst. WordPress ≥ 6.4, PHP ≥ 8.1.
-- **Performance:** serverseitiger, verschlüsselter Dateicache (Standard 4 Stunden, abschaltbar). Warme Seitenaufrufe benötigen keine Quellzugriffe.
+- **Performance:** serverseitiger, verschlüsselter Dateicache (Standard 4 Stunden, abschaltbar). Warme Seitenaufrufe benötigen keine Quellzugriffe. Ein Seitenaufruf lädt nur die Bereiche auf seinem eigenen Pfad, nie den gesamten Baum aller Quellen.
 - **Robustheit:** Im Wiki blockiert eine ausgefallene Quelle nicht die anderen. Joplin und UJMW liefern dagegen nie einen stillschweigend unvollständigen Baum.
 - **Sicherheit:** Zugangsdaten verschlüsselt gespeichert und nie in Logs oder URLs. HTML sicher gerendert, Skripte nur mit CSP-Nonce. Cache ersetzt keine Berechtigungsprüfung.
 - **Datenschutz der Quellen:** Kein Schreibvorgang ohne explizite Aktion; kein Force-Push; WordPress-Beiträge werden nie verändert.

@@ -23,5 +23,9 @@ Mögliche Weiterentwicklungen. Nichts davon ist beschlossen; eine Idee wird erst
 
 ## Tests
 
-- Regressionssuiten wieder ohne Anpassung standalone lauffähig machen (Stubs für Cache und die neuen Klassen).
+- `tests/wordpress-provider.php` wieder ohne Anpassung lauffähig machen (fehlender `FileCache`-Stub).
+
+## RAW
+
+- Schreibzugriff wie im .NET-RawController (POST = Append, DELETE = Truncate).
 - Automatisierter Live-Test gegen eine WordPress-Testinstanz und einen echten Joplin-Client.

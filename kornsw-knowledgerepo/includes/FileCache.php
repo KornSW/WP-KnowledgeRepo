@@ -102,16 +102,7 @@ final class CachedRepository implements Repository {
             try { return $this->source->call($method, $args); }
             finally { $this->memo = []; FileCache::invalidate(); }
         }
-        if ($method === 'GetAreas' && $args['recurse']) {
-            $out = []; $stack = array_reverse($this->call('GetAreas', ['startArea' => $args['startArea']])['return']); $seen = [];
-            while ($stack) {
-                $area = array_pop($stack); if (isset($seen[$area])) { continue; } $seen[$area] = true; $out[] = $area;
-                try { $children = $this->call('GetAreas', ['startArea' => $area])['return']; }
-                catch (\Throwable $e) { if (!$this->stale) { throw $e; } FileCache::warn($this->scope, $e); continue; }
-                foreach (array_reverse($children) as $child) { $stack[] = $child; }
-            }
-            return ['return' => $out];
-        }
+        // Recursive listings are cached as one entry: one file per node made cold loads very slow.
         $revision = wp_json_encode([get_option('kornsw_kr_cache_epoch', '0'), get_option('kornsw_kr_cache_' . hash('sha256', $this->scope), '0'), get_option('kornsw_kr_cache_refresh', '0')]);
         if ($revision !== $this->revision) { $this->memo = []; $this->revision = $revision; }
         $key = $method . ':' . wp_json_encode($args);

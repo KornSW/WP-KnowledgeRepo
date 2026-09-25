@@ -11,24 +11,21 @@ description: every agent should read additional skill sources as mentioned here
 
 2. When maintaining or creating new AI-Skills which are AI task related instead of pure documentation (development-process or guardrails for AI interaction), then follow the ruses from https://agentskills.io/specification.md and place it here:   /.agents/skills/<skill-name-in-lower-case>/SKILL.md
 
-   
+
 
 3. iterate  up to the file system-root to find more .agents folders on upper layers which are relevant for you.
 
-   
 
 4. Include local knowledge/skill sources (if existing) from this well-known locations:
   - C:\GIT-TK\AI-Skills\** or C:\GIT\AI-Skills\**
+  - if not available locally, this dir can be found here: https://ushell.org/wiki/raw/.agents/skills (follow the link-structure down to the SKILLs and read at least the desription-header)
 
-  - C:\GIT\SmartStandards\KnowledgeManagement\doc
 
-    
-
-4. Include this MCP-Server URLs:
+5. Include this MCP-Server URLs:
   - (coming soon)
 
-    
-5. Include this Wiki-Urls:
+
+6. Include this Wiki-Urls:
   - https://ushell.org/wiki (also consumable via **API**- see: https://ushell.org/wiki/ujmw/swagger.json)
       - aggregates knowledge to open-source-libs! Keywords/Libs/Tags: KornSW SmartStandards UShell FUSE-fx AuthTokenHandling UJMW KVU Versioning UniversalBFF CyclicTriggering SmartAmbience ComponentDiscovery
 
@@ -38,6 +35,7 @@ description: every agent should read additional skill sources as mentioned here
 
 ## additional sources (maintained by agent - no need to ask)
 
+- **Live-Instanz dieses Plugins:** https://ushell.org/wiki – der Nutzer deployt jeden Stand dieses Repos dorthin (Agents deployen nie selbst). Ohne Auth erreichbar; für Analysen am lebenden Objekt ausdrücklich freigegeben, **nur lesend**. Der Live-Stand kann hinter dem lokalen Code zurückliegen.
 - **Cowork-Prozess (verbindlich):** `C:\GIT\AI-Skills\.agents\skills\ai-cowork-process\SKILL.md` – Doku-Struktur (`README.md`, `doc/requirements|architecture|quickstart|ideas.md`), Sync Doku↔Projekt-Skill, Scope-Disziplin, Commit-Präfixe `new feature:` / `breaking change:`, `doc/changelog.md` nie manuell pflegen
 - **CONTRACT (1:1 verbindlich):** `C:\GIT\SmartStandards\KnowledgeManagement\dotnet\src\KnowledgeManagement\[Contract]\IKnowledgeRepository.cs` (+ Typen im selben Ordner) – siehe Abschnitt 0 in `most-important-details-for-knowledgerepo`
 - Referenzimplementierung (.NET): `C:\GIT\SmartStandards\KnowledgeManagement\doc\`

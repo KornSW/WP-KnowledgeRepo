@@ -60,10 +60,16 @@ final class Admin {
                     } else {
                         $entry['alias'] = Path::name($source['alias'] ?? 'Links');
                         $entry['mode'] = ($source['mode'] ?? 'list') === 'tiles' ? 'tiles' : 'list';
-                        foreach ($source['links'] ?? [] as $row) {
-                            if (trim($row['url'] ?? '') === '' && trim($row['title'] ?? '') === '') { continue; }
-                            $url = ConfiguredRepository::url($row['url'] ?? '');
-                            $entry['links'][] = ['url'=>$url, 'title'=>sanitize_text_field(trim($row['title'] ?? '') ?: $url), 'icon'=>trim($row['icon'] ?? '') !== '' ? ConfiguredRepository::url($row['icon']) : ''];
+                        // The link table arrives as one JSON field: many links must not hit max_input_vars.
+                        $rows = isset($source['links_json']) ? json_decode((string) $source['links_json'], true) : ($source['links'] ?? []);
+                        if (!is_array($rows)) { throw new Failure('Linkliste konnte nicht gelesen werden.', 400); }
+                        foreach ($rows as $row) {
+                            if (!is_array($row) || (trim((string) ($row['url'] ?? '')) === '' && trim((string) ($row['title'] ?? '')) === '')) { continue; }
+                            $url = ConfiguredRepository::url((string) ($row['url'] ?? '')); $tags = [];
+                            foreach (explode(',', (string) ($row['tags'] ?? '')) as $tag) {
+                                $tag = sanitize_text_field(trim($tag)); if ($tag !== '' && !in_array($tag, $tags, true)) { $tags[] = Path::name($tag); }
+                            }
+                            $entry['links'][] = ['url'=>$url, 'title'=>sanitize_text_field(trim((string) ($row['title'] ?? '')) ?: $url), 'icon'=>trim((string) ($row['icon'] ?? '')) !== '' ? ConfiguredRepository::url((string) $row['icon']) : '', 'tags'=>$tags];
                         }
                     }
                     (new ConfiguredRepository($entry))->validate();
@@ -100,12 +106,11 @@ final class Admin {
         echo '<p data-providers="urls"' . ($type !== 'urls' ? ' hidden' : '') . '><label><input type="checkbox" name="' . esc_attr($base . '[show_source]') . '" value="1" ' . checked($source['show_source'] ?? true, true, false) . '> Quellverweis anzeigen</label></p>';
         $field('alias', 'Dateialias der Linkliste', 'Links', 'links');
         echo '<p data-providers="links"' . ($type !== 'links' ? ' hidden' : '') . '><label>Darstellung <select name="' . esc_attr($base . '[mode]') . '"><option value="list" ' . selected($source['mode'] ?? 'list', 'list', false) . '>Liste</option><option value="tiles" ' . selected($source['mode'] ?? 'list', 'tiles', false) . '>Kacheln</option></select></label></p>';
-        foreach (['urls'=>'entries', 'links'=>'links'] as $provider=>$key) {
-            echo '<div data-providers="' . $provider . '"' . ($type !== $provider ? ' hidden' : '') . '><p class="description">' . ($provider === 'urls' ? 'Dokumente werden erst bei Bedarf geladen. Mountpunkte gelten relativ zum Mountpunkt dieser Quelle. Dateialias ist der sichtbare Dokumentname.' : 'Genau eine Dokumentseite. Leere Icon-URL verwendet /favicon.ico der Zielseite.') . '</p><div class="kr-rows">';
-            foreach ($source[$key] ?? [[]] as $number=>$row) { self::entryRow($base, $key, (string) $number, $row); }
-            echo '</div><template class="kr-row-template">'; self::entryRow($base, $key, '__ROW__', []);
-            echo '</template><p><button type="button" class="button kr-add-row">Eintrag hinzufügen</button></p></div>';
-        }
+        echo '<div data-providers="urls"' . ($type !== 'urls' ? ' hidden' : '') . '><p class="description">Dokumente werden erst bei Bedarf geladen. Mountpunkte gelten relativ zum Mountpunkt dieser Quelle. Dateialias ist der sichtbare Dokumentname.</p><div class="kr-rows">';
+        foreach ($source['entries'] ?? [[]] as $number=>$row) { self::entryRow($base, 'entries', (string) $number, $row); }
+        echo '</div><template class="kr-row-template">'; self::entryRow($base, 'entries', '__ROW__', []);
+        echo '</template><p><button type="button" class="button kr-add-row">Eintrag hinzufügen</button></p></div>';
+        self::linkTable($base, $type, $source['links'] ?? []);
         echo '<p data-providers="github github_multi ujmw"' . ($type === 'wordpress' ? ' hidden' : '') . '><label><span data-label="token">' . (in_array($type, ['github','github_multi'], true) ? 'GitHub Personal Access Token (PAT)' : 'JWT oder [PASS-TROUGH]') . '</span><br><input type="password" autocomplete="new-password" class="regular-text" name="' . esc_attr($base . '[token]') . '" value="" placeholder="' . (!empty($source['token']) ? 'Gespeichert – leer lassen zum Beibehalten' : '') . '"></label> <label><input type="checkbox" name="' . esc_attr($base . '[clear_token]') . '" value="1"> Entfernen</label></p>';
         echo '<div data-providers="wordpress"' . ($type !== 'wordpress' ? ' hidden' : '') . '><p><label><input type="checkbox" name="' . esc_attr($base . '[category_levels]') . '" value="1" ' . checked($source['category_levels'] ?? !empty($source['id']), true, false) . '> Kategorien als Navigationsebenen anzeigen</label><br><span class="description">Ohne Haken filtern die Kategorien nur die Beiträge. Beiträge stehen direkt am Mountpunkt; Mehrfachtreffer erscheinen dort einmal.</span></p><p>Kategorien auswählen</p><div class="kr-categories">';
         $terms = get_terms(['taxonomy' => 'category', 'hide_empty' => false]);
@@ -115,6 +120,22 @@ final class Admin {
             }
         }
         echo '</div></div><p><label><input type="checkbox" name="' . esc_attr($base . '[remove]') . '" value="1"> Diese Quelle beim Speichern entfernen</label></p></fieldset>';
+    }
+    /** Dense link editor. Rows are unnamed; JS serializes them into one JSON field on submit. */
+    private static function linkTable(string $base, string $type, array $links): void {
+        echo '<div data-providers="links"' . ($type !== 'links' ? ' hidden' : '') . '><p class="description">Leere Icon-URL verwendet /favicon.ico der Zielseite. Tags kommasepariert; jeder Tag wird ein eigener Bereich, Links ohne Tag stehen auf einer Seite mit dem Namen der Liste. Ohne Tags bleibt die Liste eine einzelne Seite.</p>';
+        echo '<input type="hidden" class="kr-links-json" name="' . esc_attr($base . '[links_json]') . '" value=""><p><input type="search" class="kr-link-filter" placeholder="Links filtern …" aria-label="Links filtern"> <span class="kr-link-count"></span></p>';
+        echo '<table class="kr-link-table widefat"><thead><tr><th>URL</th><th>Titel</th><th>Tags</th><th>Icon-URL</th><th></th></tr></thead><tbody>';
+        foreach ($links as $link) { self::linkRow($link); }
+        echo '</tbody></table><template class="kr-link-template">'; self::linkRow([]);
+        echo '</template><p><button type="button" class="button kr-add-link">Link hinzufügen</button></p></div>';
+    }
+    private static function linkRow(array $link): void {
+        echo '<tr>';
+        foreach (['url'=>$link['url'] ?? '', 'title'=>$link['title'] ?? '', 'tags'=>implode(', ', $link['tags'] ?? []), 'icon'=>$link['icon'] ?? ''] as $field=>$value) {
+            echo '<td><input data-field="' . $field . '" value="' . esc_attr($value) . '" aria-label="' . esc_attr(['url'=>'URL', 'title'=>'Titel', 'tags'=>'Tags', 'icon'=>'Icon-URL'][$field]) . '"></td>';
+        }
+        echo '<td><button type="button" class="button-link kr-remove-link" aria-label="Link entfernen" title="Link entfernen">×</button></td></tr>';
     }
     private static function entryRow(string $base, string $key, string $index, array $row): void {
         echo '<fieldset class="kr-entry" style="border:1px solid #ccd0d4;padding:10px;margin:8px 0">';
@@ -161,11 +182,11 @@ final class Admin {
         echo '</tbody></table><p>Anonymous verwendet bei Joplin <code>anonymous</code> / <code>anonymous</code>. Bei freigegebenem anonymem UJMW-Lesezugriff darf der Authorization-Header leer bleiben. Ungültige Tokens werden weiterhin abgelehnt.</p>';
         echo '<h2>Cache</h2><p><label>Lebensdauer (Stunden) <input type="number" min="0" max="168" step="0.25" name="cache_hours" value="' . esc_attr((string) (($s['cache_ttl'] ?? 14400) / 3600)) . '"></label></p><p>Standard: 4 Stunden. 0 deaktiviert den Cache. Angemeldete Benutzer können ihn im Wiki über Aktualisieren verwerfen.</p>';
         echo '<h2>Tokens</h2><p><label>Gültigkeit (Sekunden) <input type="number" min="300" max="31536000" name="jwt_ttl" value="' . (int) ($s['jwt_ttl'] ?? 86400) . '"></label></p><p><label>Benutzer-/Rollenprüfung zwischenspeichern (Sekunden) <input type="number" min="0" max="300" name="auth_cache_ttl" value="' . (int) ($s['auth_cache_ttl'] ?? 30) . '"></label><br><span class="description">Standard: 30 Sekunden. 0 prüft Benutzer, Rollen und Widerruf bei jedem UJMW-Aufruf erneut. Signatur und Ablauf werden immer geprüft.</span></p><p><label><input type="checkbox" name="rotate" value="1"> Alle bisher ausgestellten Tokens widerrufen</label></p>';
-        echo '<h2>Quellen und Mountpunkte</h2><p>Reihenfolge entspricht der Lesereihenfolge im Aggregator. Mehrfachbelegungen sind als Overlay lesbar; mehrdeutige Schreibziele werden abgelehnt.</p><div id="kr-sources">';
+        echo '<h2>Quellen und Mountpunkte</h2><p>Reihenfolge entspricht der Lesereihenfolge im Aggregator. Mehrfachbelegungen sind als Overlay lesbar; mehrdeutige Schreibziele werden abgelehnt.</p><div class="kr-md"><div class="kr-master"><ul id="kr-master-list" aria-label="Quellen"></ul><button type="button" class="button" id="kr-add">Quelle hinzufügen</button></div><div id="kr-sources">';
         foreach ($s['sources'] ?? [] as $id => $source) { self::source($source, $id); }
-        echo '</div><button type="button" class="button" id="kr-add">Quelle hinzufügen</button><template id="kr-template">'; self::source([], '__INDEX__'); echo '</template>';
+        echo '</div></div><template id="kr-template">'; self::source([], '__INDEX__'); echo '</template>';
         submit_button(); echo '</form></div>';
-        echo '<style>.kr-source{border:1px solid #ccd0d4;padding:12px 18px;margin:16px 0;background:white;max-width:760px}.kr-source legend{font-weight:600}.kr-categories{max-height:220px;overflow:auto;padding:10px}</style>';
+        echo '<style>.kr-md{display:flex;gap:16px;align-items:flex-start;max-width:1200px}.kr-master{flex:0 0 260px;position:sticky;top:40px}#kr-master-list{margin:0 0 8px;border:1px solid #ccd0d4;background:white;max-height:70vh;overflow:auto}#kr-master-list li{margin:0}#kr-master-list button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #f0f0f1;background:none;padding:8px 10px;cursor:pointer}#kr-master-list button small{display:block;color:#646970}#kr-master-list button[aria-current]{background:#f0f6fc;box-shadow:inset 3px 0 #2271b1}#kr-master-list button.kr-removed{text-decoration:line-through;opacity:.6}#kr-sources{flex:1;min-width:0}.kr-source{border:1px solid #ccd0d4;padding:12px 18px;margin:0 0 16px;background:white}.kr-source:not(.kr-active){display:none}.kr-source legend{font-weight:600}.kr-categories{max-height:220px;overflow:auto;padding:10px}.kr-link-table td,.kr-link-table th{padding:2px 4px}.kr-link-table input{width:100%;min-width:0;padding:0 4px;min-height:26px}.kr-link-table td:last-child{width:24px}.kr-link-table tr[hidden]{display:none}@media (max-width:782px){.kr-md{display:block}.kr-master{position:static}}</style>';
         echo <<<'JS'
 <script>
 (function () {
@@ -180,8 +201,61 @@ final class Admin {
         fieldset.querySelector('[data-label="token"]').textContent = ['github','github_multi'].includes(type) ? 'GitHub Personal Access Token (PAT)' : 'JWT oder [PASS-TROUGH]';
     }
     const sources = document.getElementById('kr-sources');
-    sources.querySelectorAll('.kr-source').forEach(refresh);
+    const master = document.getElementById('kr-master-list');
+    // Master list: one entry per source fieldset; only the selected fieldset is shown (all still submit).
+    function caption(fieldset, button) {
+        const value = name => (fieldset.querySelector('[name$="[' + name + ']"]') || {}).value || '';
+        const provider = fieldset.querySelector('.kr-provider');
+        button.replaceChildren(value('label') || value('mount') || 'Neue Quelle');
+        const small = document.createElement('small');
+        small.textContent = provider.options[provider.selectedIndex].text + ' · ' + (value('mount') || '/');
+        button.append(small);
+        button.classList.toggle('kr-removed', !!(fieldset.querySelector('[name$="[remove]"]') || {}).checked);
+    }
+    function select(fieldset) {
+        sources.querySelectorAll('.kr-source').forEach(fs => fs.classList.toggle('kr-active', fs === fieldset));
+        master.querySelectorAll('button').forEach(b => { if (b.krSource === fieldset) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); });
+    }
+    function register(fieldset) {
+        const item = document.createElement('li'); const button = document.createElement('button');
+        button.type = 'button'; button.krSource = fieldset; fieldset.krButton = button;
+        button.addEventListener('click', () => select(fieldset));
+        item.append(button); master.append(item); caption(fieldset, button); updateCount(fieldset);
+    }
+    // Link table: filter without roundtrip; serialized into one hidden JSON field on submit.
+    function updateCount(fieldset) {
+        const rows = fieldset.querySelectorAll('.kr-link-table tbody tr'); const count = fieldset.querySelector('.kr-link-count');
+        if (count) count.textContent = [...rows].filter(r => !r.hidden).length + ' / ' + rows.length + ' Links';
+    }
+    sources.addEventListener('input', event => {
+        const fieldset = event.target.closest('.kr-source'); if (!fieldset) return;
+        if (event.target.matches('.kr-link-filter')) {
+            const needle = event.target.value.trim().toLowerCase();
+            fieldset.querySelectorAll('.kr-link-table tbody tr').forEach(row => {
+                row.hidden = needle !== '' && ![...row.querySelectorAll('input')].some(input => input.value.toLowerCase().includes(needle));
+            });
+            updateCount(fieldset);
+        }
+        caption(fieldset, fieldset.krButton);
+    });
+    document.querySelector('form[action$="admin-post.php"]').addEventListener('submit', () => {
+        sources.querySelectorAll('.kr-links-json').forEach(field => {
+            if (field.disabled) return;
+            const rows = [...field.closest('[data-providers]').querySelectorAll('.kr-link-table tbody tr')].map(row => {
+                const out = {}; row.querySelectorAll('[data-field]').forEach(input => { out[input.dataset.field] = input.value; }); return out;
+            });
+            field.value = JSON.stringify(rows);
+        });
+    });
+    sources.querySelectorAll('.kr-source').forEach(fieldset => { refresh(fieldset); register(fieldset); });
+    if (sources.firstElementChild) select(sources.firstElementChild);
     sources.addEventListener('click', event => {
+        if (event.target.matches('.kr-remove-link')) { const fieldset = event.target.closest('.kr-source'); event.target.closest('tr').remove(); updateCount(fieldset); }
+        if (event.target.matches('.kr-add-link')) {
+            const group = event.target.closest('[data-providers]');
+            group.querySelector('.kr-link-table tbody').insertAdjacentHTML('beforeend', group.querySelector('.kr-link-template').innerHTML);
+            group.querySelector('.kr-link-table tbody tr:last-child input').focus(); updateCount(event.target.closest('.kr-source'));
+        }
         if (event.target.matches('.kr-remove-row')) event.target.closest('.kr-entry').remove();
         if (event.target.matches('.kr-add-row')) {
             const group = event.target.closest('[data-providers]');
@@ -190,10 +264,15 @@ final class Admin {
             refresh(event.target.closest('.kr-source'));
         }
     });
-    sources.addEventListener('change', event => { if (event.target.matches('.kr-provider')) refresh(event.target.closest('.kr-source')); });
+    sources.addEventListener('change', event => {
+        const fieldset = event.target.closest('.kr-source'); if (!fieldset) return;
+        if (event.target.matches('.kr-provider')) refresh(fieldset);
+        caption(fieldset, fieldset.krButton);
+    });
     document.getElementById('kr-add').addEventListener('click', () => {
         const html = document.getElementById('kr-template').innerHTML.replaceAll('__INDEX__', 'new' + Date.now() + Math.random().toString(16).slice(2));
-        sources.insertAdjacentHTML('beforeend', html); refresh(sources.lastElementChild);
+        sources.insertAdjacentHTML('beforeend', html); const fieldset = sources.lastElementChild;
+        refresh(fieldset); register(fieldset); select(fieldset);
     });
 })();
 </script>

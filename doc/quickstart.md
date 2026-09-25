@@ -32,7 +32,9 @@ define('KORNSW_KR_STATE_DIR', '/srv/private/knowledgerepo-state');   // NICHT we
 | GitHub (multi) | Repository-URLs (eine pro Zeile) | Jedes Repo erscheint unter `<Mountpunkt>/<Repo-Name>`; Branch, Einstieg und PAT gelten für alle. |
 | UJMW-Client | Vertragsbasis-URL bis einschließlich `IKnowledgeRepository`, JWT oder `[PASS-TROUGH]` | Pass-through-Quellen erscheinen nur bei UJMW-Aufrufen, nicht im Wiki/Joplin. |
 | URL-Dokumente | je Eintrag URL, relativer Mountpunkt, Dateialias, Format | Wird erst beim Öffnen geladen, max. 4 MiB. Quellverweis optional. |
-| Linkliste | Dateialias, Darstellung (Liste/Kacheln), Links mit Titel und optionalem Icon | Ohne Icon-URL wird `/favicon.ico` der Zielseite verwendet. |
+| Linkliste | Dateialias, Darstellung (Liste/Kacheln), Link-Tabelle: URL, Titel, Tags, Icon | Tags kommasepariert, z. B. `Tools, Doku`: Jeder Tag wird eine eigene Seite unter der Liste. Ohne Icon-URL wird `/favicon.ico` der Zielseite verwendet. |
+
+Die Quellen stehen links als Liste; ein Klick öffnet die Quelle rechts zum Bearbeiten. Beim Speichern werden immer alle Quellen übernommen, auch die gerade nicht angezeigten. Die Link-Tabelle lässt sich über das Filterfeld durchsuchen; „Link hinzufügen“ und „×“ wirken sofort, gespeichert wird mit „Änderungen speichern“.
 
 Beim Speichern bleiben bestehende Quellen-IDs erhalten. Eine Quelle deshalb **nicht** löschen und neu anlegen, nur um Einstellungen zu ändern – das würde Ressourcen-IDs und Joplin-Zuordnungen ändern.
 
@@ -83,6 +85,17 @@ Konventionen:
 Die vollständige, aus dem Code erzeugte Beschreibung aller Operationen steht unter `/wiki/ujmw/swagger.json`.
 
 Ist anonymer UJMW-Lesezugriff freigegeben, darf der Authorization-Header leer bleiben. Tokens widerrufen: im Dialog **API-Zugang** (eigene Tokens) oder über Schlüsselrotation im Admin (alle Tokens).
+
+## RAW-Zugriff
+
+`/wiki/raw/` ist ein nur lesender Spiegel des Wissensbaums in reinem Markdown. Er eignet sich für einfache Agents, `curl` oder zum schnellen Nachsehen:
+
+```bash
+curl https://<site>/wiki/raw/                 # Navigation mit absoluten URLs der Unterbereiche
+curl https://<site>/wiki/raw/Handbuch/Setup   # Markdown des Dokuments
+```
+
+Die Berechtigung ist dieselbe wie im Wiki. Ohne Anmeldung funktioniert RAW nur, wenn Anonymous für „Seite“ freigegeben ist.
 
 ## Fehlerdiagnose
 

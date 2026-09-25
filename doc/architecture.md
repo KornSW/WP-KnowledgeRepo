@@ -10,7 +10,7 @@
      Plugin.php – Routing /wiki/…, Authentifizierung (Auth.php)
                   │
                   ▼
-     Aggregator – Mounts, virtuelle Elternbereiche, Overlays, opake Ressourcen-IDs
+     Aggregator – Mounts, virtuelle Elternbereiche, Overlays, opake Ressourcen-IDs (lazy)
                   │
       ┌───────────┼───────────┬──────────────┬───────────────┐
       ▼           ▼           ▼              ▼               ▼
@@ -39,6 +39,7 @@ Alle Kanäle sprechen denselben Vertrag `IKnowledgeRepository`. In PHP ist die V
 | `includes/SearchSession.php` | Schrittweise Suche, vom Browser getaktet |
 | `includes/WikiPresentation.php` | Darstellungsmodi Neutral/Themed/On-Page, Akzentfarben-Erkennung |
 | `includes/OpenApi.php` | Erzeugt `swagger.json` aus dem Vertrag |
+| `includes/Raw.php` | Nur lesende RAW-Fassade `/wiki/raw/` (Markdown-Navigation, Inhalte, Ressourcen) |
 | `includes/Admin.php` | Einstellungsseite, providerabhängige Felder |
 | `includes/Plugin.php` | Routing, Wiki-Seite, Dialoge, UJMW-Server, Lifecycle |
 | `assets/wiki.css` | Referenzoptik; `wiki-themed.css` und `wiki-on-page.css` für die weiteren Modi |
@@ -46,7 +47,7 @@ Alle Kanäle sprechen denselben Vertrag `IKnowledgeRepository`. In PHP ist die V
 
 ## Wissensmodell
 
-- Bereiche sind absolute logische Pfade ab `/`. Die Reihenfolge ist fachlich (Depth-first Pre-order, natürliche Geschwisterfolge) und wird nicht alphabetisch umsortiert.
+- Bereiche sind absolute logische Pfade ab `/`. Die Reihenfolge innerhalb einer Quelle ist fachlich (Depth-first Pre-order, natürliche Geschwisterfolge) und wird nicht umsortiert. Nur der Aggregator ordnet die Wurzel und eingehängte Mountpunkte alphabetisch ein (siehe unten).
 - `ContentLevel`: 0 BeyondContent, 1 ContentAggregation (kein direkter Text), 2 ContentContainer.
 - Ressourcen werden als `knowledge-resource:<opaque-id>` referenziert. IDs sind opak; nur der erzeugende Provider bzw. Aggregator interpretiert sie.
 - Markdown wird in einen Baum aus Überschriften zerlegt (ATX, Code-Fences sind undurchsichtig).
@@ -54,6 +55,20 @@ Alle Kanäle sprechen denselben Vertrag `IKnowledgeRepository`. In PHP ist die V
   - **Replace** ersetzt atomar.
   - **Truncate** leert, **Delete** entfernt.
   - **Move** hängt einen Bereich unter einen neuen Elternbereich.
+
+## Aggregator
+
+Der Aggregator lädt **lazy**:
+
+- Zu welcher Quelle ein Bereich gehört, ergibt sich aus den Mountpunkten und der Kinderliste des Elternbereichs.
+- Eine Wiki-Seite fragt deshalb nur die Bereiche entlang ihres eigenen Pfads ab.
+- Nur rekursive Aufrufe (Joplin, UJMW `GetAreas(recurse)`, Stichwortsuche) laden ganze Bäume, dann mit **einem** rekursiven Aufruf je Quelle.
+
+Sortierung:
+
+- Die Wurzel wird alphabetisch sortiert.
+- Tiefer liegende Mountpunkte stehen vor dem ersten Geschwister, das alphabetisch danach kommt.
+- Die Reihenfolge innerhalb einer Quelle bleibt unangetastet.
 
 ## Provider
 
@@ -71,12 +86,13 @@ Bei einem Konflikt wird bis zu dreimal neu gelesen und erneut angewendet. **GitH
 
 **UJMW-Client** ruft einen entfernten Dienst mit gleichem Vertrag auf. Pass-through-Quellen stehen nur zur Verfügung, wenn ein eingehender UJMW-Aufruf ein Token mitbringt.
 
-**URL-Dokumente/Linkliste** sind konfigurierte, nur lesende Dokumente. Navigation lädt keine Fremdinhalte; der Download erfolgt erst beim Öffnen oder Durchsuchen.
+**URL-Dokumente/Linkliste** sind konfigurierte, nur lesende Dokumente. Navigation lädt keine Fremdinhalte; der Download erfolgt erst beim Öffnen oder Durchsuchen. Eine Linkliste mit Tags wird zum Ordner mit einer Seite je Tag.
 
 ## Cache
 
 - Der Dateicache liegt standardmäßig unter `WP_CONTENT_DIR/kornsw-knowledge-cache`, überschreibbar mit `KORNSW_KR_CACHE_DIR`.
 - Inhalte sind mit AES-256-GCM verschlüsselt; die Dateinamen sind HMAC-Schlüssel.
+- Jede Vertragsantwort einer Quelle ist ein Eintrag. Das gilt auch für eine rekursive Bereichsliste, die nicht in einen Eintrag je Knoten zerlegt wird.
 - Eine globale Generation (`kornsw_kr_cache_epoch`) invalidiert den Cache. Auslöser sind Admin-Speichern, Wiki-Aktualisieren, WordPress-Änderungen, Remote-Schreibvorgänge und GitHub-Commits.
 - Fehler werden höchstens 30 Sekunden zwischengespeichert.
 - Der Cache ist wegwerfbar und **keine** Autorisierung.
@@ -101,6 +117,7 @@ Anders als der Cache ist der Sync-Zustand **nicht** wegwerfbar.
 | Wiki | `/wiki/<Bereich>` | WordPress-Sitzung (Kanal „Seite“) |
 | Suche | `/wiki/_search?q=…`, danach `/wiki/_search/<id>` | wie Wiki |
 | Ressourcen | `/wiki/_resource/<id>` | wie Wiki |
+| RAW (nur GET) | `/wiki/raw/<Bereich>`, `/wiki/raw/resources/<id>` | wie Wiki |
 | Joplin | `/wiki/joplin/<Profil>/` | Basic Auth mit WordPress-Konto oder `anonymous`/`anonymous` |
 | UJMW | `/wiki/ujmw/IKnowledgeRepository/<Operation>` | eigenes JWT oder freigegebener anonymer Zugang |
 | API-Beschreibung | `/wiki/ujmw/swagger.json` | – |
@@ -118,4 +135,10 @@ Anders als der Cache ist der Sync-Zustand **nicht** wegwerfbar.
 
 ## Tests
 
-`tests/regression.php` und `tests/wordpress-provider.php` sind Standalone-Suiten mit simuliertem WordPress und GitHub. Sie wurden für die erste Version geschrieben; seit Einführung von Cache und weiteren Klassen brauchen sie zusätzliche Includes/WordPress-Stubs und laufen nicht mehr unverändert. Sie decken Merge-Semantik, GitHub-Transaktionen, Aggregator-Overlays, Joplin-Byte-Stabilität/Pending/Delete, JWT/Widerruf und den WordPress-Provider ab. Eine Live-Abnahme ersetzen sie nicht (siehe [Quickstart](quickstart.md#live-abnahme)).
+Standalone-Suiten mit simuliertem WordPress und GitHub:
+
+- `tests/regression.php`: Merge-Semantik, GitHub-Transaktionen, Aggregator-Overlays, Joplin-Byte-Stabilität/Pending/Delete, JWT/Widerruf.
+- `tests/aggregator-links.php`: Lazy-Aggregator, Sortierung, Fehlerisolation, Linklisten mit Tags.
+- `tests/wordpress-provider.php`: WordPress-Provider. Benötigt derzeit zusätzlich einen `FileCache`-Stub.
+
+Ohne lokales PHP laufen die Suiten auch über `@php-wasm/node`. Eine Live-Abnahme ersetzen sie nicht (siehe [Quickstart](quickstart.md#live-abnahme)).

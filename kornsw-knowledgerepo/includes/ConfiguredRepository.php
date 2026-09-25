@@ -18,6 +18,7 @@ final class ConfiguredRepository extends TreeRepository {
     protected function load(): void {
         if ($this->loaded) { return; }
         $this->nodes = ['/'=>['name'=>($this->config['label'] ?? '') ?: 'Dokumente', 'level'=>1, 'text'=>'']];
+        if ($this->config['type'] === 'links' && self::tags($this->config['links'] ?? [])) { $this->loadTagged(); $this->loaded = true; return; }
         $rows = $this->config['type'] === 'links' ? [['mount'=>'/', 'alias'=>$this->config['alias']]] : ($this->config['entries'] ?? []);
         foreach ($rows as $row) {
             $parent = Path::normalize($row['mount'] ?? '/'); $path = '/';
@@ -33,6 +34,24 @@ final class ConfiguredRepository extends TreeRepository {
         }
         $this->loaded = true;
     }
+    /** Distinct tags in natural order; an untagged link list keeps its single-document shape. */
+    public static function tags(array $links): array {
+        $tags = [];
+        foreach ($links as $link) { foreach ($link['tags'] ?? [] as $tag) { if (!in_array((string) $tag, $tags, true)) { $tags[] = (string) $tag; } } }
+        usort($tags, 'strnatcasecmp'); return $tags;
+    }
+    /** Tagged list: the alias becomes a folder, each tag a page; untagged links get a page named like the list. */
+    private function loadTagged(): void {
+        $alias = Path::name($this->config['alias']); $folder = Path::join('/', Path::segment($alias));
+        $this->nodes[$folder] = ['name'=>$alias, 'level'=>1, 'text'=>''];
+        $pages = [];
+        foreach ($this->config['links'] ?? [] as $link) { if (!($link['tags'] ?? [])) { $pages[$alias] = [null]; break; } }
+        foreach (self::tags($this->config['links'] ?? []) as $tag) { $pages[$tag][] = $tag; }
+        foreach ($pages as $name => $tags) {
+            $path = Path::join($folder, Path::segment((string) $name));
+            $this->entries[$path] = ['tags'=>$tags]; $this->nodes[$path] = ['name'=>(string) $name, 'level'=>2, 'text'=>''];
+        }
+    }
     /** Validate structure without contacting any source. */
     public function validate(): void { $this->load(); }
     protected function caps(string $area): array {
@@ -43,9 +62,13 @@ final class ConfiguredRepository extends TreeRepository {
         $this->node($area);
         if (!isset($this->entries[$area]) || isset($this->contents[$area])) { return; }
         if ($this->config['type'] === 'links') {
-            $lines = [];
+            $lines = []; $page = $this->entries[$area]['tags'] ?? null;
             foreach ($this->config['links'] ?? [] as $link) {
-                $lines[] = '- [' . self::label($link['title']) . '](' . self::destination($link['url']) . ')';
+                if ($page !== null) {
+                    $tags = $link['tags'] ?? [];
+                    if (!array_filter($page, static function ($tag) use ($tags) { return $tag === null ? !$tags : in_array($tag, $tags, true); })) { continue; }
+                }
+                $lines[] ='- [' . self::label($link['title']) . '](' . self::destination($link['url']) . ')';
             }
             $text = implode("\n", $lines);
         } else {
@@ -149,7 +172,7 @@ final class ConfiguredRepository extends TreeRepository {
                     $wrapper->insertBefore($notice, $wrapper->firstChild);
                 }
             }
-            if (($source['type'] ?? '') !== 'links' || Path::join($source['mount'], Path::segment($source['alias'])) !== $area) { continue; }
+            if (($source['type'] ?? '') !== 'links' || !Path::contains(Path::join($source['mount'], Path::segment($source['alias'])), $area)) { continue; }
             foreach ($xpath->query('.//ul', $wrapper) as $list) {
                 $list->setAttribute('class', 'kr-link-directory ' . (($source['mode'] ?? 'list') === 'tiles' ? 'kr-link-tiles' : 'kr-link-list'));
                 foreach ($xpath->query('./li/a', $list) as $anchor) {

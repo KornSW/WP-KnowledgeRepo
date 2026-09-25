@@ -11,7 +11,7 @@
  */
 if (!defined('ABSPATH')) { exit; }
 define('KORNSW_KR_FILE', __FILE__);
-$requiredClasses = ['Contract', 'FileCache', 'Http', 'WordPressRepository', 'GitHubRepository', 'Aggregator', 'Auth', 'Joplin', 'Admin', 'SearchSession', 'ConfiguredRepository', 'WikiPresentation', 'OpenApi', 'Plugin'];
+$requiredClasses = ['Contract', 'FileCache', 'Http', 'WordPressRepository', 'GitHubRepository', 'Aggregator', 'Auth', 'Joplin', 'Admin', 'SearchSession', 'ConfiguredRepository', 'WikiPresentation', 'OpenApi', 'Raw', 'Plugin'];
 $missingFiles = [];
 foreach ($requiredClasses as $class) {
     $file = __DIR__ . '/includes/' . $class . '.php';

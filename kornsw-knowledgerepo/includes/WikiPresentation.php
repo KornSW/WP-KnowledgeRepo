@@ -8,7 +8,7 @@ final class WikiPresentation {
         return in_array($mode, ['neutral','themed','on_page'], true) ? $mode : 'neutral';
     }
     public static function defer(string $relative): bool {
-        if (self::mode() !== 'on_page' || preg_match('~^/(?:ujmw|joplin|_search|_resource)(?:/|$)~', $relative) || did_action('template_redirect')) { return false; }
+        if (self::mode() !== 'on_page' || preg_match('~^/(?:ujmw|joplin|raw|_search|_resource)(?:/|$)~', $relative) || did_action('template_redirect')) { return false; }
         add_filter('pre_handle_404', static function ($preempt, $query) { $query->is_404 = false; return true; }, 10, 2);
         add_action('template_redirect', [Plugin::class, 'route'], 0);
         return true;

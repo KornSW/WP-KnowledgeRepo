@@ -33,6 +33,8 @@ final class Http {
                     $reason .= ' PAT-Berechtigungen, Repository-Zugriff und gegebenenfalls Organisations-/SSO-Freigabe prüfen.';
                 } elseif ($status === 404) { $reason .= ' Repository, Branch, Einstiegspfad oder Zugriffsrechte prüfen.'; }
             }
+            // URLs are validated credential-free above; tokens travel only in the Authorization header.
+            if ($status === 404) { $reason .= ' URL: ' . $method . ' ' . $url; }
             throw new Failure($reason, $mapped);
         }
         $data = json_decode(wp_remote_retrieve_body($response), true);

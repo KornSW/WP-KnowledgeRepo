@@ -150,13 +150,11 @@ final class Plugin {
             $level = Auth::requireAccess('page');
             if (strpos($relative, '/_resource/') === 0) {
                 if (!in_array($method, ['GET', 'HEAD'], true)) { throw new Failure('Methode nicht erlaubt.', 405); }
-                $id = rawurldecode(substr($relative, strlen('/_resource/')));
-                $r = self::repository('', true)->call('GetResourceContent', ['resourceId' => $id]);
-                $bytes = base64_decode($r['return'], true);
-                if ($bytes === false) { throw new Failure('Ressource ungültig.', 502); }
-                $mime = (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes);
-                $inline = in_array($mime, ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'], true);
-                self::respond(200, ['Content-Type' => $inline ? $mime : 'application/octet-stream', 'Content-Disposition' => $inline ? 'inline' : 'attachment; filename="resource"', 'Content-Security-Policy' => "default-src 'none'; sandbox"], $bytes);
+                self::respond(...self::resourceResponse(self::repository('', true), rawurldecode(substr($relative, strlen('/_resource/')))));
+            }
+            if ($relative === '/raw' || strpos($relative, '/raw/') === 0) {
+                if (!in_array($method, ['GET', 'HEAD'], true)) { throw new Failure('RAW ist nur lesend (GET).', 405); }
+                self::respond(...Raw::handle(substr($relative, strlen('/raw'))));
             }
             if ($relative === '/_search' || strpos($relative, '/_search/') === 0) {
                 if ($method !== 'GET') { throw new Failure('Suche benötigt GET.', 405); }
@@ -206,6 +204,14 @@ final class Plugin {
             if ($e->status === 503) { $headers['Retry-After'] = '5'; }
             self::respond($e->status, $headers, $json ? wp_json_encode(['fault' => $e->getMessage()]) : $e->getMessage());
         }
+    }
+    /** @return array{0:int,1:array,2:string} Only raster images render inline; everything else downloads. */
+    public static function resourceResponse(Repository $repo, string $id): array {
+        $bytes = base64_decode($repo->call('GetResourceContent', ['resourceId' => $id])['return'], true);
+        if ($bytes === false) { throw new Failure('Ressource ungültig.', 502); }
+        $mime = (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes);
+        $inline = in_array($mime, ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'], true);
+        return [200, ['Content-Type' => $inline ? $mime : 'application/octet-stream', 'Content-Disposition' => $inline ? 'inline' : 'attachment; filename="resource"', 'Content-Security-Policy' => "default-src 'none'; sandbox"], $bytes];
     }
     public static function link(string $area): string { return home_url('/wiki' . implode('/', array_map('rawurlencode', explode('/', Path::transport($area))))); }
     /** Breadcrumb/page navigation stops at the first content container. */
@@ -337,7 +343,7 @@ final class Plugin {
         if ($canToken) {
             self::dialogStart('api-dialog', 'API-Zugang');
             if ($message !== '' && $activeDialog === 'api-dialog') { echo '<p class="notice" role="status">' . esc_html($message) . '</p>'; }
-            ?><p>Vertragsbasis</p><code class="api-url"><?php echo esc_html(home_url('/wiki/ujmw/')); ?></code><form method="post" action="<?php echo esc_url(self::link($area)); ?>"><?php wp_nonce_field('kornsw_kr_wiki'); ?><button name="kr_action" value="token">JWT erzeugen</button><button name="kr_action" value="revoke">Meine Tokens widerrufen</button></form><?php
+            ?><p>Vertragsbasis</p><code class="api-url"><?php echo esc_html(home_url('/wiki/ujmw/')); ?></code><p>API-Beschreibung (OpenAPI)</p><code class="api-url"><a href="<?php echo esc_url(home_url('/wiki/ujmw/swagger.json')); ?>" target="_blank" rel="noopener"><?php echo esc_html(home_url('/wiki/ujmw/swagger.json')); ?></a></code><form method="post" action="<?php echo esc_url(self::link($area)); ?>"><?php wp_nonce_field('kornsw_kr_wiki'); ?><button name="kr_action" value="token">JWT erzeugen</button><button name="kr_action" value="revoke">Meine Tokens widerrufen</button></form><?php
             if ($token) { echo '<p>Gültig bis ' . esc_html(gmdate('d.m.Y H:i', $token['expires'])) . ' UTC. Header: <code>Authorization: Bearer TOKEN</code></p><textarea readonly rows="5" aria-label="JWT">' . esc_textarea($token['token']) . '</textarea>'; }
             echo '</dialog>';
         }

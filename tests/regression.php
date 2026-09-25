@@ -227,4 +227,23 @@ run('UJMW fault and required field validation; passthrough never silently anonym
     $failed = false; try { Contract::arguments('GetAreas', ['recurse' => 'false']); } catch (Failure $e) { $failed = true; }
     expect($failed, 'Typed parameter accepted as wrong type');
 });
+run('Root README is listed first, read-only, with resolved links, and only when present', function () {
+    resetGit(['README.md' => "Hello\n\n![Shot](doc/img.png) [Guide](other/Guide.md)", 'doc/Zeta.md' => 'Z', 'doc/img.png' => 'png', 'outside.md' => 'O']);
+    $r = new GitHubRepository(['url' => 'https://github.com/test/repo', 'root' => '/doc', 'root_readme' => true]);
+    $areas = $r->call('GetAreas', ['startArea' => '/'])['return'];
+    expect($areas[0] === '/README' && in_array('/Zeta', $areas, true), 'README not first: ' . json_encode($areas));
+    $text = $r->call('GetDirectContent', ['area' => '/README'])['return'];
+    expect(str_contains($text, '![Shot](knowledge-resource:') && str_contains($text, '(https://github.com/test/repo/blob/main/other/Guide.md)'), 'README links: ' . $text);
+    $caps = $r->call('GetAreaCapabilities', ['area' => '/README']);
+    expect(!$caps['canAppendContent'] && !$caps['canBeDeleted'] && !$caps['canBeRenamed'], 'README writable');
+    expect($r->call('GetAreaCapabilities', ['area' => '/Zeta'])['canAppendContent'], 'Entry documents must stay writable');
+    $off = new GitHubRepository(['url' => 'https://github.com/test/repo', 'root' => '/doc']);
+    expect(!in_array('/README', $off->call('GetAreas', ['startArea' => '/'])['return'], true), 'README without option');
+    resetGit(['doc/Zeta.md' => 'Z']);
+    $none = new GitHubRepository(['url' => 'https://github.com/test/repo', 'root' => '/doc', 'root_readme' => true]);
+    expect($none->call('GetAreas', ['startArea' => '/'])['return'] === ['/Zeta'], 'Phantom README');
+    resetGit(['README.md' => 'Root', 'doc/README.md' => 'Own']);
+    $own = new GitHubRepository(['url' => 'https://github.com/test/repo', 'root' => '/doc', 'root_readme' => true]);
+    expect($own->call('GetDirectContent', ['area' => '/README'])['return'] === 'Own', 'Entry README must win');
+});
 echo "ALL REGRESSIONS PASSED\n";

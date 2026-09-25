@@ -29,7 +29,7 @@ define('KORNSW_KR_STATE_DIR', '/srv/private/knowledgerepo-state');   // NICHT we
 |---|---|---|
 | WordPress-Beiträge | Kategorien, „Kategorien als Navigationsebenen“ | Immer nur lesend. Ohne Haken stehen alle Beiträge direkt am Mountpunkt. |
 | GitHub | `https://github.com/Owner/Repo`, Branch, Einstiegsverzeichnis, PAT | Für private Repos Leserechte, zum Schreiben *Contents: write*. Branch-Schutz bleibt wirksam. |
-| GitHub (multi) | Repository-URLs (eine pro Zeile) | Jedes Repo erscheint unter `<Mountpunkt>/<Repo-Name>`; Branch, Einstieg und PAT gelten für alle. |
+| GitHub (multi) | Repository-URLs (eine pro Zeile), „README.md aus der Repository-Wurzel anzeigen“ | Jedes Repo erscheint unter `<Mountpunkt>/<Repo-Name>`; Branch, Einstieg und PAT gelten für alle. Mit Einstieg `/doc` und Haken steht die Root-README jeweils oben an erster Stelle. |
 | UJMW-Client | Vertragsbasis-URL bis einschließlich `IKnowledgeRepository`, JWT oder `[PASS-TROUGH]` | Pass-through-Quellen erscheinen nur bei UJMW-Aufrufen, nicht im Wiki/Joplin. |
 | URL-Dokumente | je Eintrag URL, relativer Mountpunkt, Dateialias, Format | Wird erst beim Öffnen geladen, max. 4 MiB. Quellverweis optional. |
 | Linkliste | Dateialias, Darstellung (Liste/Kacheln), Link-Tabelle: URL, Titel, Tags, Icon | Tags kommasepariert, z. B. `Tools, Doku`: Jeder Tag wird eine eigene Seite unter der Liste. Ohne Icon-URL wird `/favicon.ico` der Zielseite verwendet. |

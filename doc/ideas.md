@@ -2,6 +2,8 @@
 
 Mögliche Weiterentwicklungen. Nichts davon ist beschlossen; eine Idee wird erst nach ausdrücklicher Entscheidung zu einer Anforderung in [requirements.md](requirements.md).
 
+suche ist sehr langsam - braucchen wir nen cache
+
 ## Authentifizierung
 
 - **Externe JWT-Aussteller:** Tokens fremder Identity-Provider akzeptieren (Issuer, Signaturschlüssel/JWKS konfigurierbar).

@@ -26,7 +26,7 @@ Das Plugin ist ein WordPress/PHP-Nachbau des .NET-Projekts [SmartStandards/Knowl
 - Unterstützte Quellentypen:
   - **WordPress-Beiträge** – immer nur lesend; veröffentlichte, nicht passwortgeschützte Beiträge aus ausgewählten Kategorien. Kategorien wahlweise als Navigationsebenen oder nur als Filter.
   - **GitHub** – ein Repository (optional Branch, Einstiegsverzeichnis, PAT); lesen und schreiben ausschließlich über die GitHub-API, ohne Klonen.
-  - **GitHub (multi)** – mehrere Repositories mit gemeinsamen Einstellungen; jedes erscheint unter `<Mountpunkt>/<Repo-Name>`.
+  - **GitHub (multi)** – mehrere Repositories mit gemeinsamen Einstellungen; jedes erscheint unter `<Mountpunkt>/<Repo-Name>`. Optional zeigt jedes Repo bei gesetztem Einstiegsverzeichnis (z. B. `/doc`) zusätzlich die `README.md` seiner Wurzel als ersten, nur lesbaren Eintrag „README“, sofern sie existiert und das Einstiegsverzeichnis keine eigene README hat.
   - **UJMW-Client** – ein entfernter `IKnowledgeRepository`-Dienst mit festem JWT oder durchgereichtem Aufrufer-Token (`[PASS-TROUGH]`).
   - **URL-Dokumente** – einzelne Markdown-/Text-/HTML-Dokumente von beliebigen HTTP(S)-URLs, nur lesend, mit optionalem Quellverweis.
   - **Linkliste** – Links als Liste oder Kacheln, nur lesend. Links können kommaseparierte Tags tragen. Dann wird die Liste zu einem Ordner mit je einer Seite pro Tag; Links ohne Tag stehen auf einer Seite mit dem Namen der Liste.

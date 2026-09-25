@@ -101,6 +101,15 @@ Mutation: aktuellen Head **ungecacht** lesen → logische Änderung vorbereiten 
 
 GitHub-Ressourcen-IDs und dokumentgebundene `.Res…`-Dateien sind private Providerkonventionen. Beim Move/Rename gebundene Ressourcen mitnehmen; freie Ressourcen behalten ihren Ort, relative Links korrigieren. Joplin-DELETE ist davon getrennt.
 
+Option `root_readme` (Admin-Checkbox nur bei GitHub multi, wird über `multiEntries` an jede Einzelquelle vererbt):
+
+- **Wirkung:** Bei gesetztem Einstiegsverzeichnis fügt `listDirectory('')` die README.md der Repo-Wurzel als ersten Knoten `/README` ein.
+- **Kennung:** Der Knoten hat `file = GitHubRepository::ROOT_README` (`"\0README"`). Das ist kein echter Pfad; die Datei steht deshalb nie in `$this->files` und wird bei Commits nie berührt.
+- **Nur lesend:** `caps()` setzt alle Schreibrechte auf `false`, denn Schreiben passiert ausschließlich im Einstiegsverzeichnis. Im Writing-Modus (`loadFresh`/`rebuild`) existiert der Knoten nicht.
+- **Links:** Bilder unterhalb des Einstiegsverzeichnisses werden zu Ressourcen, alle übrigen relativen Links zu `github.com/…/blob|raw/<branch>/…`.
+- **Namenskonflikt:** Hat das Einstiegsverzeichnis eine eigene README.md, gewinnt diese, und die Root-README entfällt.
+- **Falle:** `resolveLink()` nie mit leerem Dateinamen aufrufen. `dirname('')` ergibt einen Pfad mit führendem `/`, und `listDirectory('/')` rekursiert dann endlos.
+
 Expliziter User-Agent sowohl HTTP-Header als auch WordPress-Option. HTTP 403 ist nicht zwangsläufig ein User-Agent-Problem: PAT-Rechte, Organisations-SSO und Rate-Limit unterscheiden. Fehlermeldung zeigt gegebenenfalls Reset-Zeit UTC. Keine Zugangsdaten in Logs/Fehlertexten ausgeben.
 
 ### UJMW-Client

@@ -44,6 +44,7 @@ final class Admin {
                 }
                 if ($type === 'github') { new GitHubRepository($entry); }
                 if ($type === 'github_multi') {
+                    $entry['root_readme'] = !empty($source['root_readme']);
                     $entry['urls'] = implode("\n", array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', $source['urls'] ?? '')), 'strlen'));
                     GitHubRepository::multiEntries($entry);
                 }
@@ -103,6 +104,7 @@ final class Admin {
         echo '<p data-providers="github_multi"' . ($type !== 'github_multi' ? ' hidden' : '') . '><label>Repository-URLs (eine pro Zeile)<br><textarea class="large-text" rows="6" name="' . esc_attr($base . '[urls]') . '">' . esc_textarea($source['urls'] ?? '') . '</textarea></label><span class="description">Mountpunkt/RepoName; Einstieg, Branch und PAT gelten für alle.</span></p>';
         $field('root', 'GitHub-Einstiegsverzeichnis', '/', 'github github_multi');
         $field('branch', 'GitHub-Branch (leer: Default)', '', 'github github_multi');
+        echo '<p data-providers="github_multi"' . ($type !== 'github_multi' ? ' hidden' : '') . '><label><input type="checkbox" name="' . esc_attr($base . '[root_readme]') . '" value="1" ' . checked(!empty($source['root_readme']), true, false) . '> Zusätzlich README.md aus der Repository-Wurzel anzeigen</label><br><span class="description">Nur bei gesetztem Einstiegsverzeichnis: Die README erscheint als erster, nur lesbarer Eintrag „README“, sofern sie existiert und das Einstiegsverzeichnis keine eigene README.md hat.</span></p>';
         echo '<p data-providers="urls"' . ($type !== 'urls' ? ' hidden' : '') . '><label><input type="checkbox" name="' . esc_attr($base . '[show_source]') . '" value="1" ' . checked($source['show_source'] ?? true, true, false) . '> Quellverweis anzeigen</label></p>';
         $field('alias', 'Dateialias der Linkliste', 'Links', 'links');
         echo '<p data-providers="links"' . ($type !== 'links' ? ' hidden' : '') . '><label>Darstellung <select name="' . esc_attr($base . '[mode]') . '"><option value="list" ' . selected($source['mode'] ?? 'list', 'list', false) . '>Liste</option><option value="tiles" ' . selected($source['mode'] ?? 'list', 'tiles', false) . '>Kacheln</option></select></label></p>';

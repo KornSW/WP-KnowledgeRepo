@@ -66,6 +66,7 @@ final class GitHubRepository extends TreeRepository {
         if (!empty($listing['truncated'])) { throw new Failure('GitHub-Verzeichnis unvollständig.', 503); }
         $entries = $listing['tree']; usort($entries, static function ($a, $b) { return strcmp($a['path'], $b['path']); });
         $parent = $this->addDirectory($dir);
+        if ($dir === '') { $this->addRootReadme($entries); }
         foreach ($entries as $entry) {
             if (strpos($entry['path'], '/') !== false || in_array($entry['path'], ['.', '..'], true)) { continue; }
             $file = ($dir === '' ? '' : $dir . '/') . $entry['path'];
@@ -80,10 +81,47 @@ final class GitHubRepository extends TreeRepository {
         }
         $this->listed[$dir] = true;
     }
+    /** Marker for the repository-root README shown above an entry directory; never a real path. */
+    const ROOT_README = "\0README";
+    private $rootReadme = null;
+    /** Option root_readme: README.md of the repository root becomes the first, read-only document. */
+    private function addRootReadme(array $entries): void {
+        if (empty($this->config['root_readme']) || $this->root === '') { return; }
+        foreach ($entries as $entry) { if ($entry['type'] === 'blob' && preg_match('/^readme\.md$/i', $entry['path'])) { return; } }
+        foreach ($this->api('/git/trees/' . $this->tree)['tree'] as $entry) {
+            if ($entry['type'] === 'blob' && $entry['mode'] !== '120000' && preg_match('/^readme\.md$/i', $entry['path'])) {
+                $this->rootReadme = $entry; $this->nodes['/']['level'] = 1;
+                $this->nodes['/README'] = ['name' => 'README', 'level' => 2, 'text' => '', 'file' => self::ROOT_README, 'indices' => []];
+                return;
+            }
+        }
+    }
+    /** README links are relative to the repository root: images inside the entry directory become resources, everything else absolute GitHub URLs. */
+    private function rootReadmeText(): string {
+        if (($this->rootReadme['size'] ?? 0) > 16777216) { throw new Failure('README überschreitet 16 MiB.', 413); }
+        $blob = $this->api('/git/blobs/' . $this->rootReadme['sha']);
+        $text = base64_decode(preg_replace('/\s+/', '', $blob['content']), true);
+        if ($text === false) { throw new Failure('Ungültiger GitHub-Blob.', 502); }
+        $web = preg_replace('~(?:\.git)?/?$~', '', $this->config['url']);
+        return preg_replace_callback('~(!?\[[^\]\n]*\]\()([^\s)]+)([^)]*\))~', function ($m) use ($web) {
+            if (preg_match('~^(?:[a-z][a-z0-9+.-]*:|/|#)~i', $m[2])) { return $m[0]; }
+            [$link, $fragment] = array_pad(explode('#', $m[2], 2), 2, null); $parts = [];
+            foreach (explode('/', rawurldecode($link)) as $p) {
+                if ($p === '..') { if (!$parts) { return $m[0]; } array_pop($parts); } elseif ($p !== '.' && $p !== '') { $parts[] = $p; }
+            }
+            $path = implode('/', $parts);
+            if ($m[1][0] === '!' && strpos($path, $this->root . '/') === 0) {
+                $inside = $this->resolveLink('README.md', substr($path, strlen($this->root) + 1));
+                if ($inside !== null) { return $m[1] . 'knowledge-resource:' . $this->rid($inside) . $m[3]; }
+            }
+            $url = $web . ($m[1][0] === '!' ? '/raw/' : '/blob/') . rawurlencode($this->branch) . '/' . implode('/', array_map('rawurlencode', $parts));
+            return $m[1] . $url . ($fragment !== null ? '#' . $fragment : '') . $m[3];
+        }, $text);
+    }
     private function loadDocument(string $area): void {
         $n = $this->nodes[$area]; $file = $n['file'];
         if ($this->writing || isset($this->docsLoaded[$file])) { return; }
-        $tree = Markdown::parse($this->canonical($this->read($file), $file), $n['name']);
+        $tree = Markdown::parse($file === self::ROOT_README ? $this->rootReadmeText() : $this->canonical($this->read($file), $file), $n['name']);
         $this->documents[$file] = $tree; $this->nodes[$area]['text'] = $tree['text'];
         $this->addHeadings($area, $tree, $file, []); $this->docsLoaded[$file] = true;
     }
@@ -224,7 +262,8 @@ final class GitHubRepository extends TreeRepository {
         $n = $this->node($area);
         if (!$this->writing && $n['indices'] === null) { $this->listDirectory($n['file']); $n = $this->nodes[$area]; }
         $c = parent::caps($area);
-        if (empty($this->config['readonly'])) {
+        // The root README lives outside the entry directory, which alone is written.
+        if (empty($this->config['readonly']) && ($n['file'] ?? '') !== self::ROOT_README) {
             $c['canBeRenamed'] = $c['canBeDeleted'] = $area !== '/';
             $c['canAddSubAreas'] = true;
             $c['canAppendContent'] = $c['canTruncate'] = $n['level'] !== 0;

@@ -32,6 +32,7 @@ final class Plugin {
                     case 'wordpress': $mount['repo'] = new WordPressRepository($source); break;
                     case 'github': $mount['repo'] = new GitHubRepository($source); break;
                     case 'ujmw': $mount['repo'] = new RemoteRepository($source, $incoming, $ujmw); break;
+                    case 'urls': case 'links': $mount['repo'] = new ConfiguredRepository($source); break;
                     default: throw new Failure('Unbekannter Quellentyp.', 500);
                 }
                 $mount['repo'] = new CachedRepository($mount['repo'], $scope, $tolerant);
@@ -117,7 +118,7 @@ final class Plugin {
                 $json = true;
                 self::$ujmwTimings = ['kr_boot'=>(microtime(true) - ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true))) * 1000];
                 if ($method !== 'POST') { throw new Failure('UJMW benötigt POST.', 405); }
-                if (!preg_match('~^/ujmw/(?:IKnowledgeRepository/)?([A-Za-z]+)/*$~', $relative, $match)) { throw new Failure('UJMW-Operation fehlt.', 404); }
+                if (!preg_match('~^/ujmw/([A-Za-z]+)/*$~', $relative, $match)) { throw new Failure('UJMW-Operation fehlt.', 404); }
                 $authStart = microtime(true);
                 try { $auth = Auth::bearer(); $level = Auth::requireAccess('ujmw', $auth['user']); }
                 finally { self::$ujmwTimings['kr_auth'] = (microtime(true) - $authStart) * 1000; }
@@ -216,6 +217,16 @@ final class Plugin {
         $dom->loadHTML('<?xml encoding="utf-8" ?><div id="kr-body">' . $html . '</div>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
         libxml_clear_errors(); libxml_use_internal_errors($previous);
         $xpath = new \DOMXPath($dom); $wrapper = $dom->getElementById('kr-body');
+        ConfiguredRepository::decorate($dom, $xpath, $wrapper, $area);
+        foreach ($xpath->query('.//a[@href]', $wrapper) as $link) {
+            $href = $link->getAttribute('href');
+            $destination = parse_url(strpos($href, '//') === 0 ? 'https:' . $href : $href);
+            $site = parse_url(home_url('/'));
+            if (isset($destination['host']) && (strcasecmp($destination['host'], $site['host'] ?? '') !== 0
+                || ($destination['port'] ?? null) !== ($site['port'] ?? null) || ($destination['scheme'] ?? '') !== ($site['scheme'] ?? ''))) {
+                $link->setAttribute('target', '_blank'); $link->setAttribute('rel', 'noopener noreferrer');
+            }
+        }
         $children = []; $seen = [$area=>true];
         $stack = array_reverse($repo->call('GetAreas', ['recurse'=>false, 'startArea'=>$area])['return']);
         while ($stack) {
@@ -263,7 +274,7 @@ final class Plugin {
         $scriptNonce = base64_encode(random_bytes(18));
         $errors = method_exists($repo, 'errors') ? $repo->errors() : FileCache::warnings();
         ob_start();
-        ?><!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?php echo esc_html($title); ?> · Wissen</title><link rel="stylesheet" href="<?php echo esc_url(plugins_url('assets/wiki.css', KORNSW_KR_FILE) . '?ver=0.1.3'); ?>"></head><body>
+        ?><!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title><?php echo esc_html($title); ?> · Wissen</title><link rel="stylesheet" href="<?php echo esc_url(plugins_url('assets/wiki.css', KORNSW_KR_FILE) . '?ver=0.1.8'); ?>"></head><body>
         <header class="site-header"><a class="brand" href="<?php echo esc_url(home_url('/wiki/')); ?>">Wissen</a><div class="header-actions">
         <form id="wiki-search" role="search" action="<?php echo esc_url(home_url('/wiki/_search')); ?>"><input type="search" name="q" maxlength="200" aria-label="Wissen durchsuchen" placeholder="Wissen durchsuchen …" required><button type="submit" class="quiet">Suchen</button></form>
         <?php if (is_user_logged_in()) { ?><form method="post" action="<?php echo esc_url(self::link($area)); ?>"><?php wp_nonce_field('kornsw_kr_wiki'); ?><button class="quiet" name="kr_action" value="refresh" title="Quellen neu laden">Aktualisieren</button></form><?php } ?>
@@ -308,12 +319,37 @@ final class Plugin {
         if ($canToken) {
             self::dialogStart('api-dialog', 'API-Zugang');
             if ($message !== '' && $activeDialog === 'api-dialog') { echo '<p class="notice" role="status">' . esc_html($message) . '</p>'; }
-            ?><p>Vertragsbasis</p><code class="api-url"><?php echo esc_html(home_url('/wiki/ujmw/IKnowledgeRepository/')); ?></code><form method="post" action="<?php echo esc_url(self::link($area)); ?>"><?php wp_nonce_field('kornsw_kr_wiki'); ?><button name="kr_action" value="token">JWT erzeugen</button><button name="kr_action" value="revoke">Meine Tokens widerrufen</button></form><?php
+            ?><p>Vertragsbasis</p><code class="api-url"><?php echo esc_html(home_url('/wiki/ujmw/')); ?></code><form method="post" action="<?php echo esc_url(self::link($area)); ?>"><?php wp_nonce_field('kornsw_kr_wiki'); ?><button name="kr_action" value="token">JWT erzeugen</button><button name="kr_action" value="revoke">Meine Tokens widerrufen</button></form><?php
             if ($token) { echo '<p>Gültig bis ' . esc_html(gmdate('d.m.Y H:i', $token['expires'])) . ' UTC. Header: <code>Authorization: Bearer TOKEN</code></p><textarea readonly rows="5" aria-label="JWT">' . esc_textarea($token['token']) . '</textarea>'; }
             echo '</dialog>';
         }
         ?><script nonce="<?php echo esc_attr($scriptNonce); ?>">
         (() => {
+            const highlight = (new URLSearchParams(location.search).get('highlight') || '').trim().slice(0, 200);
+            const article = document.getElementById('document-content');
+            if (article && highlight) {
+                const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT, {acceptNode: node =>
+                    node.parentElement.closest('script,style,textarea,mark') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT});
+                const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+                const pattern = new RegExp(highlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'); let count = 0;
+                nodes.forEach(node => {
+                    const value = node.nodeValue; let start = 0, match; pattern.lastIndex = 0;
+                    const fragment = document.createDocumentFragment();
+                    while (count < 1000 && (match = pattern.exec(value)) !== null) {
+                        const at = match.index;
+                        fragment.append(document.createTextNode(value.slice(start, at)));
+                        const mark = document.createElement('mark'); mark.className = 'kr-search-highlight';
+                        mark.textContent = match[0]; fragment.append(mark);
+                        start = at + match[0].length; count++;
+                    }
+                    if (start) { fragment.append(document.createTextNode(value.slice(start))); node.replaceWith(fragment); }
+                });
+                if (!location.hash) article.querySelector('mark')?.scrollIntoView({block:'center'});
+            }
+            document.querySelectorAll('.kr-link-directory img').forEach(img => {
+                img.addEventListener('error', () => { img.hidden = true; });
+                if (img.complete && !img.naturalWidth) img.hidden = true;
+            });
             const show = id => { const dialog = document.getElementById(id); if (dialog && !dialog.open) dialog.showModal(); };
             document.querySelectorAll('[data-dialog]').forEach(button => button.addEventListener('click', () => show(button.dataset.dialog)));
             document.querySelectorAll('.close-dialog').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
@@ -341,7 +377,8 @@ final class Plugin {
                 const render = data => {
                     data.results.slice(displayed).forEach(result => {
                         const card = document.createElement('div'); card.className = 'search-result'; const link = document.createElement('a');
-                        link.href = result.url; link.textContent = result.title; link.addEventListener('click', () => { stopSearch(); searchDialog.close(); });
+                        const target = new URL(result.url, location.href); target.searchParams.set('highlight', query);
+                        link.href = target.href; link.textContent = result.title; link.addEventListener('click', () => { stopSearch(); searchDialog.close(); });
                         const path = document.createElement('small'); path.textContent = result.path; const snippet = document.createElement('p'); snippet.textContent = result.snippet;
                         card.append(link, path, snippet); results.append(card);
                     });
